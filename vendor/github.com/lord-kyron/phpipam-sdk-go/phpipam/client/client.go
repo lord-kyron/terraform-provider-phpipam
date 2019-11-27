@@ -5,9 +5,9 @@ package client
 import (
 	"fmt"
 
-	"github.com/paybyphone/phpipam-sdk-go/phpipam"
-	"github.com/paybyphone/phpipam-sdk-go/phpipam/request"
-	"github.com/paybyphone/phpipam-sdk-go/phpipam/session"
+	"github.com/lord-kyron/phpipam-sdk-go/phpipam"
+	"github.com/lord-kyron/phpipam-sdk-go/phpipam/request"
+	"github.com/lord-kyron/phpipam-sdk-go/phpipam/session"
 )
 
 // Client encompasses a generic client object that is further extended by

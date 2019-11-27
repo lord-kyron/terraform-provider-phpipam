@@ -493,49 +493,49 @@
 		},
 		{
 			"checksumSHA1": "POLdeJ+e4C9O1Gg1EQul9vJ8q7U=",
-			"path": "github.com/paybyphone/phpipam-sdk-go/controllers/addresses",
+			"path": "github.com/lord-kyron/phpipam-sdk-go/controllers/addresses",
 			"revision": "7fec9c4189656f6bb4509329dfe77767ee0b03fc",
 			"revisionTime": "2017-04-03T00:18:55Z"
 		},
 		{
 			"checksumSHA1": "8DoCZFEF8xaZrDJEfdhWqu42hf0=",
-			"path": "github.com/paybyphone/phpipam-sdk-go/controllers/sections",
+			"path": "github.com/lord-kyron/phpipam-sdk-go/controllers/sections",
 			"revision": "7fec9c4189656f6bb4509329dfe77767ee0b03fc",
 			"revisionTime": "2017-04-03T00:18:55Z"
 		},
 		{
 			"checksumSHA1": "vidGgBwKBnajwt70e+5ekPXMmvc=",
-			"path": "github.com/paybyphone/phpipam-sdk-go/controllers/subnets",
+			"path": "github.com/lord-kyron/phpipam-sdk-go/controllers/subnets",
 			"revision": "7fec9c4189656f6bb4509329dfe77767ee0b03fc",
 			"revisionTime": "2017-04-03T00:18:55Z"
 		},
 		{
 			"checksumSHA1": "COAuIHHMIdQaJlZfaAYMhn7ew74=",
-			"path": "github.com/paybyphone/phpipam-sdk-go/controllers/vlans",
+			"path": "github.com/lord-kyron/phpipam-sdk-go/controllers/vlans",
 			"revision": "7fec9c4189656f6bb4509329dfe77767ee0b03fc",
 			"revisionTime": "2017-04-03T00:18:55Z"
 		},
 		{
 			"checksumSHA1": "F++orFwGmYJkwpTiDxVI3srrWzQ=",
-			"path": "github.com/paybyphone/phpipam-sdk-go/phpipam",
+			"path": "github.com/lord-kyron/phpipam-sdk-go/phpipam",
 			"revision": "7fec9c4189656f6bb4509329dfe77767ee0b03fc",
 			"revisionTime": "2017-04-03T00:18:55Z"
 		},
 		{
 			"checksumSHA1": "4mk74Bkioqkx2+D+yeR2b/Wmwyc=",
-			"path": "github.com/paybyphone/phpipam-sdk-go/phpipam/client",
+			"path": "github.com/lord-kyron/phpipam-sdk-go/phpipam/client",
 			"revision": "7fec9c4189656f6bb4509329dfe77767ee0b03fc",
 			"revisionTime": "2017-04-03T00:18:55Z"
 		},
 		{
 			"checksumSHA1": "SjmycWTgtT0Rit7DDNy8Sl/SShA=",
-			"path": "github.com/paybyphone/phpipam-sdk-go/phpipam/request",
+			"path": "github.com/lord-kyron/phpipam-sdk-go/phpipam/request",
 			"revision": "7fec9c4189656f6bb4509329dfe77767ee0b03fc",
 			"revisionTime": "2017-04-03T00:18:55Z"
 		},
 		{
 			"checksumSHA1": "R1/J0Xef+KZNQTFfaUb4EOuUD6E=",
-			"path": "github.com/paybyphone/phpipam-sdk-go/phpipam/session",
+			"path": "github.com/lord-kyron/phpipam-sdk-go/phpipam/session",
 			"revision": "7fec9c4189656f6bb4509329dfe77767ee0b03fc",
 			"revisionTime": "2017-04-03T00:18:55Z"
 		},
@@ -547,5 +547,5 @@
 			"revisionTime": "2017-03-15T16:33:13Z"
 		}
 	],
-	"rootPath": "github.com/paybyphone/terraform-provider-phpipam"
+	"rootPath": "github.com/lord-kyron/terraform-provider-phpipam-0.3.0"
 }

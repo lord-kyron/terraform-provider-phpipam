@@ -3,7 +3,7 @@ package session
 
 import (
 	"github.com/imdario/mergo"
-	"github.com/paybyphone/phpipam-sdk-go/phpipam"
+	"github.com/lord-kyron/phpipam-sdk-go/phpipam"
 )
 
 // timeLayout represents the datetime format returned by the PHPIPAM api.
