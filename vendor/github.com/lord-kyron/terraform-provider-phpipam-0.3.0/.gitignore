@@ -1,0 +1,3 @@
+terraform-provider-phpipam
+pkg/
+tf.log
