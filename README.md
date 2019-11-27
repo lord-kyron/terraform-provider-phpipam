@@ -1,8 +1,8 @@
-# Terraform PHPIPAM provider - version 0.3.0
+# Terraform PHPIPAM provider - version 0.3.1
 # ATTENTION!!! 
 This repository is based on the original work of github user paybyphone.
 However, the version of the provider in this repo is updated and revised to support working with Terraform 12.x+
-The build here is currently based on the babyphone original repo + hashicorp original terraform repo and was build around Terraform version 0.12.11
+The build here is currently based on the babyphone original repo + hashicorp original terraform repo and was build around Terraform version 0.12.16
 All credit should go to https://github.com/paybyphone/terraform-provider-phpipam - I've just modernized his work!
  
 # Terraform Provider Plugin for PHPIPAM
@@ -32,7 +32,7 @@ into your config. Check the [releases page][6] of this repo to get releases for
 Linux, OS X, and Windows.
 
 [5]: https://www.terraform.io/docs/plugins/basics.html
-[6]: https://github.com/lord-kyron/terraform-provider-phpipam-0.3.0/releases
+[6]: https://github.com/lord-kyron/terraform-provider-phpipam-0.3.1/releases
 
 ## Usage
 
@@ -65,19 +65,19 @@ data "phpipam_subnet" "subnet" {
 }
 
 data "phpipam_first_free_address" "next_address" {
-  subnet_id = "${data.phpipam_subnet.subnet.subnet_id}"
+  subnet_id = data.phpipam_subnet.subnet.subnet_id
 }
 
 resource "phpipam_address" {
-  subnet_id   = "${data.phpipam_subnet.subnet.subnet_id}"
-  ip_address  = "${data.phpipam_first_free_address.next_address.ip_address}"
+  subnet_id   = data.phpipam_subnet.subnet.subnet_id
+  ip_address  = data.phpipam_first_free_address.next_address.ip_address
   hostname    = "tf-test-host.example.internal"
   description = "Managed by Terraform"
 
   lifecycle {
     ignore_changes = [
-      "subnet_id",
-      "ip_address",
+      subnet_id,
+      ip_address,
     ]
   }
 }
@@ -125,7 +125,7 @@ data "phpipam_address" "address" {
 }
 
 output "address_description" {
-  value = "${data.phpipam_address.address.description}"
+  value = data.phpipam_address.address.description
 }
 ```
 
@@ -138,7 +138,7 @@ data "phpipam_address" "address" {
 }
 
 output "address_description" {
-  value = "${data.phpipam_address.address.description}"
+  value = data.phpipam_address.address.description
 }
 ```
 
@@ -154,7 +154,7 @@ data "phpipam_address" "address" {
 }
 
 output "address_description" {
-  value = "${data.phpipam_address.address.description}"
+  value = data.phpipam_address.address.description
 }
 ```
 
@@ -242,12 +242,12 @@ data "phpipam_addresses" "address_search" {
 }
 
 data "phpipam_address" "addresses" {
-  count      = "${length(data.phpipam_addresses.address_search.address_ids)}"
-  address_id = "${element(data.phpipam_addresses.address_search.address_ids, count.index)}"
+  count      = length(data.phpipam_addresses.address_search.address_ids)
+  address_id = element(data.phpipam_addresses.address_search.address_ids, count.index)
 }
 
 output "ip_addresses" {
-  value = ["${data.phpipam_address.addresses.*.ip_address}"]
+  value = [data.phpipam_address.addresses.*.ip_address]
 }
 ```
 
@@ -303,21 +303,21 @@ data "phpipam_subnet" "subnet" {
 
 // Get the first available address
 data "phpipam_first_free_address" "next_address" {
-  subnet_id = "${data.phpipam_subnet.subnet.subnet_id}"
+  subnet_id = data.phpipam_subnet.subnet.subnet_id
 }
 
 // Reserve the address. Note that we use ignore_changes here to ensure that we
 // don't end up re-allocating this address on future Terraform runs.
 resource "phpipam_address" {
-  subnet_id   = "${data.phpipam_subnet.subnet.subnet_id}"
-  ip_address  = "${data.phpipam_first_free_address.next_address.ip_address}"
+  subnet_id   = data.phpipam_subnet.subnet.subnet_id
+  ip_address  = data.phpipam_first_free_address.next_address.ip_address
   hostname    = "tf-test-host.example.internal"
   description = "Managed by Terraform"
 
   lifecycle {
     ignore_changes = [
-      "subnet_id",
-      "ip_address",
+      subnet_id,
+      ip_address,
     ]
   }
 }
@@ -331,7 +331,7 @@ resource "vsphere_virtual_machine" "web" {
 
   network_interface {
     label        = "VM Network"
-    ipv4_address = "${data.phpipam_first_free_address.next_address.ip_address}"
+    ipv4_address = data.phpipam_first_free_address.next_address.ip_address
   }
 
   disk {
@@ -339,7 +339,7 @@ resource "vsphere_virtual_machine" "web" {
   }
 
   ignore_changes = [
-    "network_interface",
+    network_interface,
   ]
 }
 ```
@@ -371,7 +371,7 @@ data "phpipam_section" "section" {
 }
 
 resource "phpipam_subnet" "subnet" {
-  section_id = "${data.phpipam_section.section.section_id}"
+  section_id = data.phpipam_section.section.section_id
   subnet_address = "10.10.3.0"
   subnet_mask = 24
 }
@@ -425,7 +425,7 @@ data "phpipam_subnet" "subnet" {
 
 // Reserve the address.
 resource "phpipam_address" {
-  subnet_id   = "${data.phpipam_subnet.subnet.subnet_id}"
+  subnet_id   = data.phpipam_subnet.subnet.subnet_id
   ip_address  = "10.10.2.10"
   hostname    = "tf-test-host.example.internal"
   description = "Managed by Terraform"
@@ -443,21 +443,21 @@ data "phpipam_subnet" "subnet" {
 
 // Get the first available address
 data "phpipam_first_free_address" "next_address" {
-  subnet_id = "${data.phpipam_subnet.subnet.subnet_id}"
+  subnet_id = data.phpipam_subnet.subnet.subnet_id
 }
 
 // Reserve the address. Note that we use ignore_changes here to ensure that we
 // don't end up re-allocating this address on future Terraform runs.
 resource "phpipam_address" {
-  subnet_id   = "${data.phpipam_subnet.subnet.subnet_id}"
-  ip_address  = "${data.phpipam_first_free_address.next_address.ip_address}"
+  subnet_id   = data.phpipam_subnet.subnet.subnet_id
+  ip_address  = data.phpipam_first_free_address.next_address.ip_address
   hostname    = "tf-test-host.example.internal"
   description = "Managed by Terraform"
 
   lifecycle {
     ignore_changes = [
-      "subnet_id",
-      "ip_address",
+      subnet_id,
+      ip_address,
     ]
   }
 }
@@ -477,21 +477,21 @@ data "phpipam_subnet" "subnet" {
 
 // Get the first available address
 data "phpipam_first_free_address" "next_address" {
-  subnet_id = "${data.phpipam_subnet.subnet.subnet_id}"
+  subnet_id = data.phpipam_subnet.subnet.subnet_id
 }
 
 // Reserve the address. Note that we use ignore_changes here to ensure that we
 // don't end up re-allocating this address on future Terraform runs.
 resource "phpipam_address" {
-  subnet_id   = "${data.phpipam_subnet.subnet.subnet_id}"
-  ip_address  = "${data.phpipam_first_free_address.next_address.ip_address}"
+  subnet_id   = data.phpipam_subnet.subnet.subnet_id
+  ip_address  = data.phpipam_first_free_address.next_address.ip_address
   hostname    = "tf-test-host.example.internal"
   description = "Managed by Terraform"
 
   lifecycle {
     ignore_changes = [
-      "subnet_id",
-      "ip_address",
+      subnet_id,
+      ip_address,
     ]
   }
 }
@@ -595,16 +595,16 @@ data "phpipam_subnets" "subnet_search" {
 }
 
 data "phpipam_subnet" "subnets" {
-  count      = "${length(data.phpipam_subnets.subnet_search.subnet_ids)}"
-  address_id = "${element(data.phpipam_subnets.subnet_search.subnet_ids, count.index)}"
+  count      = length(data.phpipam_subnets.subnet_search.subnet_ids)
+  address_id = element(data.phpipam_subnets.subnet_search.subnet_ids, count.index)
 }
 
 output "subnet_addresses" {
-  value = ["${data.phpipam_subnet.subnets.*.ip_address}"]
+  value = [data.phpipam_subnet.subnets.*.ip_address]
 }
 
 output "subnet_cidrs" {
-  value = ["${formatlist("%s/%d", data.phpipam_subnet.subnets.*.subnet_address, data.phpipam_subnet.subnets.*.subnet_mask)}"]
+  value = [formatlist("%s/%d", data.phpipam_subnet.subnets.*.subnet_address, data.phpipam_subnet.subnets.*.subnet_mask)]
 }
 ```
 
@@ -656,10 +656,10 @@ data "phpipam_vlan" "vlan" {
 }
 
 resource "phpipam_subnet" "subnet" {
-  section_id     = "${data.phpipam_section.section.section_id}"
+  section_id     = data.phpipam_section.section.section_id
   subnet_address = "10.10.3.0"
   subnet_mask    = 24
-  vlan_id        = "${data.phpipam_vlan.vlan.vlan_id}"
+  vlan_id        = data.phpipam_vlan.vlan.vlan_id
 }
 ```
 
@@ -716,14 +716,14 @@ data "phpipam_subnet" "subnet" {
 
 // Get the first available address
 data "phpipam_first_free_address" "next_address" {
-  subnet_id = "${data.phpipam_subnet.subnet.subnet_id}"
+  subnet_id = data.phpipam_subnet.subnet.subnet_id
 }
 
 // Reserve the address. Note that we use ignore_changes here to ensure that we
 // don't end up re-allocating this address on future Terraform runs.
 resource "phpipam_address" {
-  subnet_id   = "${data.phpipam_subnet.subnet.subnet_id}"
-  ip_address  = "${data.phpipam_first_free_address.next_address.ip_address}"
+  subnet_id   = data.phpipam_subnet.subnet.subnet_id
+  ip_address  = data.phpipam_first_free_address.next_address.ip_address
   hostname    = "tf-test-host.example.internal"
   description = "Managed by Terraform"
 
@@ -733,8 +733,8 @@ resource "phpipam_address" {
 
   lifecycle {
     ignore_changes = [
-      "subnet_id",
-      "ip_address",
+      subnet_id,
+      ip_address,
     ]
   }
 }
@@ -846,7 +846,7 @@ data "phpipam_section" "section" {
 }
 
 resource "phpipam_subnet" "subnet" {
-  section_id     = "${data.phpipam_section.section.section_id}"
+  section_id     = data.phpipam_section.section.section_id
   subnet_address = "10.10.3.0"
   subnet_mask    = 24
 
@@ -979,4 +979,4 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ```
-# terraform-provider-phpipam-0.3.0
+# terraform-provider-phpipam-0.3.1

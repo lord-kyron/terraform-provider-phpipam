@@ -1,3 +1,9 @@
+## 0.3.1
+New stuff:
+ * Fixed paths across the whole code
+ * Build around Terraform version 0.12.16 (latest release, but still API version 5)
+ * Build with goland v 1.12.13
+
 ## 0.3.0
 New version supporting new Terraform API version 5
  * The whole provider was re-build around teeraform source code for version 0.12.x+

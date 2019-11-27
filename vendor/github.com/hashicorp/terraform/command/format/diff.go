@@ -502,7 +502,7 @@ func (p *blockBodyDiffPrinter) writeValue(val cty.Value, action plans.Action, in
 				ty, err := ctyjson.ImpliedType(src)
 				// check for the special case of "null", which decodes to nil,
 				// and just allow it to be printed out directly
-				if err == nil && !ty.IsPrimitiveType() && val.AsString() != "null" {
+				if err == nil && !ty.IsPrimitiveType() && strings.TrimSpace(val.AsString()) != "null" {
 					jv, err := ctyjson.Unmarshal(src, ty)
 					if err == nil {
 						p.buf.WriteString("jsonencode(")
@@ -1086,8 +1086,8 @@ func ctySequenceDiff(old, new []cty.Value) []*plans.Change {
 	var oldI, newI, lcsI int
 	for oldI < len(old) || newI < len(new) || lcsI < len(lcs) {
 		for oldI < len(old) && (lcsI >= len(lcs) || !old[oldI].RawEquals(lcs[lcsI])) {
-			isObjectDiff := old[oldI].Type().IsObjectType() && (newI >= len(new) || new[newI].Type().IsObjectType())
-			if isObjectDiff && newI < len(new) {
+			isObjectDiff := old[oldI].Type().IsObjectType() && newI < len(new) && new[newI].Type().IsObjectType() && (lcsI >= len(lcs) || !new[newI].RawEquals(lcs[lcsI]))
+			if isObjectDiff {
 				ret = append(ret, &plans.Change{
 					Action: plans.Update,
 					Before: old[oldI],
