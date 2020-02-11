@@ -94,15 +94,19 @@ func bareAddressSchema() map[string]*schema.Schema {
 
 // resourceAddressSchema returns the schema for the phpipam_address resource.
 // It sets the required and optional fields, the latter defined in
-// resourceAddressRequiredFields, and ensures that all optional and
+// resourceAddressOptionalFields, and ensures that all optional and
 // non-configurable fields are computed as well.
 func resourceAddressSchema() map[string]*schema.Schema {
 	s := bareAddressSchema()
 	for k, v := range s {
 		switch {
 		// IP Address and Subnet ID are ForceNew
-		case k == "subnet_id" || k == "ip_address":
+		case k == "subnet_id":
 			v.Required = true
+			v.ForceNew = true
+	  case k == "ip_address":
+			v.Optional = true
+			v.Computed = true
 			v.ForceNew = true
 		case k == "custom_fields":
 			v.Optional = true
@@ -165,7 +169,7 @@ func dataSourceAddressSchema() map[string]*schema.Schema {
 }
 
 // expandAddress returns the addresses.Address structure for a
-// phpiapm_address resource or data source. Depending on if we are dealing with
+// phpipam_address resource or data source. Depending on if we are dealing with
 // the resource or data source, extra considerations may need to be taken.
 func expandAddress(d *schema.ResourceData) addresses.Address {
 	s := addresses.Address{
