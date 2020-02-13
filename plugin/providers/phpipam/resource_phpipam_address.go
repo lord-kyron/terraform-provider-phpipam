@@ -25,7 +25,29 @@ func resourcePHPIPAMAddress() *schema.Resource {
 }
 
 func resourcePHPIPAMAddressCreate(d *schema.ResourceData, meta interface{}) error {
-	c := meta.(*ProviderPHPIPAMClient).addressesController
+	client := meta.(*ProviderPHPIPAMClient)
+	c := client.addressesController
+
+	// Get the next free address if no IP is specified.
+	if (d.Get("ip_address").(string) == "") {
+		// By default Terraform runs operations in parallel. Protect the
+		// GetFirstFreeAddress and CreateAddress operations with a lock so they are
+		// not run concurrently.
+		client.addressAllocationLock.Lock()
+		defer client.addressAllocationLock.Unlock()
+
+		subnet_c := client.subnetsController
+		out, err := subnet_c.GetFirstFreeAddress(d.Get("subnet_id").(int))
+	  if err != nil {
+			return err
+		}
+		if out == "" {
+			return errors.New("Subnet has no free IP addresses")
+		}
+
+		d.Set("ip_address", out)
+	}
+
 	in := expandAddress(d)
 
 	// Assert the ID field here is empty. If this is not empty the request will fail.
