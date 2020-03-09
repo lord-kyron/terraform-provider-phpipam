@@ -35,7 +35,6 @@ Linux, OS X, and Windows.
 [6]: https://github.com/lord-kyron/terraform-provider-phpipam-0.3.1/releases
 
 Examle for CentOS 7:
-1. Install required packages
 ```
 yum install golang git
 mkdir -p $HOME/development/terraform-providers/
@@ -46,8 +45,6 @@ go install
 go build
 cp terraform-provider-phpipam ~/.terraform.d/plugins/
 ```
-
-2. Clone 
 
 
 ## Usage

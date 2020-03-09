@@ -2,7 +2,7 @@ package main
 
 import (
 	"github.com/hashicorp/terraform-plugin-sdk/plugin"
-	"github.com/pavel-z1/terraform-provider-phpipam/plugin/providers/phpipam"
+	"github.com/lord-kyron/terraform-provider-phpipam/plugin/providers/phpipam"
 )
 
 func main() {

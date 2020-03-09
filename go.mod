@@ -1,4 +1,4 @@
-module github.com/pavel-z1/terraform-provider-phpipam
+module github.com/lord-kyron/terraform-provider-phpipam
 
 go 1.13
 
