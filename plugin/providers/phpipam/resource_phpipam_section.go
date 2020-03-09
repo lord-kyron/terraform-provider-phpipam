@@ -1,6 +1,6 @@
 package phpipam
 
-import "github.com/hashicorp/terraform/helper/schema"
+import "github.com/hashicorp/terraform-plugin-sdk/helper/schema"
 
 // resourcePHPIPAMSection returns the resource structure for the phpipam_section
 // resource.

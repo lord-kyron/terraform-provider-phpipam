@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/hashicorp/terraform/plugin"
+	"github.com/hashicorp/terraform-plugin-sdk/plugin"
 )
 
 // pluginVersionExpected provides the expected plugin version that this release

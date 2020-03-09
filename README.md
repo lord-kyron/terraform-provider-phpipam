@@ -34,6 +34,19 @@ Linux, OS X, and Windows.
 [5]: https://www.terraform.io/docs/plugins/basics.html
 [6]: https://github.com/lord-kyron/terraform-provider-phpipam-0.3.1/releases
 
+Examle for CentOS 7:
+```
+yum install golang git
+mkdir -p $HOME/development/terraform-providers/
+cd $HOME/development/terraform-providers/
+git clone https://github.com/lord-kyron/terraform-provider-phpipam
+# In some cases need execute go install twice
+go install
+go build
+cp terraform-provider-phpipam ~/.terraform.d/plugins/
+```
+
+
 ## Usage
 
 After installation, to use the plugin, simply use any of its resources or data
