@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/hashicorp/terraform/helper/schema"
-	"github.com/lord-kyron/phpipam-sdk-go/phpipam"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
+	"github.com/paybyphone/phpipam-sdk-go/phpipam"
 )
 
 // resourcePHPIPAMAddress returns the resource structure for the phpipam_address

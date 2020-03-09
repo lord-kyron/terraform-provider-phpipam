@@ -3,8 +3,8 @@ package phpipam
 import (
 	"errors"
 
-	"github.com/hashicorp/terraform/helper/schema"
-	"github.com/lord-kyron/phpipam-sdk-go/controllers/addresses"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
+	"github.com/paybyphone/phpipam-sdk-go/controllers/addresses"
 )
 
 func dataSourcePHPIPAMAddress() *schema.Resource {
