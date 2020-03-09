@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"log"
 
 	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
 	"github.com/paybyphone/phpipam-sdk-go/controllers/addresses"
@@ -93,7 +94,15 @@ func trimMap(in map[string]interface{}) {
 //    custom_fields at all, set all keys to nil and update so that all custom
 //    fields get blown away.
 func updateCustomFields(d *schema.ResourceData, client interface{}) error {
+	log.Printf("Start Update custom fields ...............")
 	customFields := make(map[string]interface{})
+	log.Printf("Defined custom fields ...............%s", customFields)
+
+	// If no custom_fields defined - stop sub
+	if len(d.Get("custom_fields").(map[string]interface{})) == 0 {
+		return nil
+	}
+
 	if m, ok := d.GetOk("custom_fields"); ok {
 		customFields = m.(map[string]interface{})
 	}

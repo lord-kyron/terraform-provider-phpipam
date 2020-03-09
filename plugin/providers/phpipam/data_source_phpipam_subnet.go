@@ -43,14 +43,19 @@ func dataSourcePHPIPAMSubnetRead(d *schema.ResourceData, meta interface{}) error
 	if len(out) != 1 {
 		return errors.New("Your search returned zero or multiple results. Please correct your search and try again")
 	}
-	flattenSubnet(out[0], d)
-	fields, err := c.GetSubnetCustomFields(out[0].ID)
-	if err != nil {
-		return err
+		flattenSubnet(out[0], d)
+        if len(d.Get("custom_fields").(map[string]interface{})) != 0 {
+		//flattenSubnet(out[0], d)
+		fields, err := c.GetSubnetCustomFields(out[0].ID)
+		if err != nil {
+			return err
+		}
+
+		trimMap(fields)
+		if err := d.Set("custom_fields", fields); err != nil {
+			return err
+		}
 	}
-	trimMap(fields)
-	if err := d.Set("custom_fields", fields); err != nil {
-		return err
-	}
+
 	return nil
 }

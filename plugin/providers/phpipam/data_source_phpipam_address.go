@@ -2,6 +2,7 @@ package phpipam
 
 import (
 	"errors"
+        "log"
 
 	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
 	"github.com/paybyphone/phpipam-sdk-go/controllers/addresses"
@@ -15,6 +16,7 @@ func dataSourcePHPIPAMAddress() *schema.Resource {
 }
 
 func dataSourcePHPIPAMAddressRead(d *schema.ResourceData, meta interface{}) error {
+        log.Printf("[DEBUG] Start Reading IP Address ..............")
 	c := meta.(*ProviderPHPIPAMClient).addressesController
 	out := make([]addresses.Address, 1)
 	var err error
@@ -43,13 +45,16 @@ func dataSourcePHPIPAMAddressRead(d *schema.ResourceData, meta interface{}) erro
 		return errors.New("Your search returned zero or multiple results. Please correct your search and try again")
 	}
 	flattenAddress(out[0], d)
-	fields, err := c.GetAddressCustomFields(out[0].ID)
-	if err != nil {
-		return err
+	if len(d.Get("custom_fields").(map[string]interface{})) != 0 {
+		fields, err := c.GetAddressCustomFields(out[0].ID)
+		if err != nil {
+			return err
+		}
+		trimMap(fields)
+		if err := d.Set("custom_fields", fields); err != nil {
+			return err
+		}
 	}
-	trimMap(fields)
-	if err := d.Set("custom_fields", fields); err != nil {
-		return err
-	}
+
 	return nil
 }

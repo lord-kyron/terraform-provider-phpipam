@@ -69,8 +69,10 @@ func resourcePHPIPAMSubnetUpdate(d *schema.ResourceData, meta interface{}) error
 		return err
 	}
 
-	if err := updateCustomFields(d, c); err != nil {
-		return err
+	if len(d.Get("custom_fields").(map[string]interface{})) != 0 {
+		if err := updateCustomFields(d, c); err != nil {
+			return err
+		}
 	}
 
 	return dataSourcePHPIPAMSubnetRead(d, meta)
