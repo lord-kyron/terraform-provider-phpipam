@@ -798,6 +798,44 @@ The following attributes are exported:
  * `last_seen` - The last time this IP address answered ping probes.
  * `edit_date` - The last time this resource was modified.
 
+#### The `phpipam_first_free_address` Resource - Dynamic IPs creation
+
+The `phpipam_first_free_address` resource allow to create automatically 
+new IP in defined network without execution Terraform data instruction. You can use it
+to create several IP addresses automatically. This resource support the same arguments as
+phpipam_address.  An example usage is below.
+
+⚠️  **NOTE:** This is experimental new feature. You can use Terraform count
+instruction. But be carefull, phpIPAM currently has a bug https://github.com/phpipam/phpipam/issues/2960
+Use resource with count option only with limitted terraform threads count: `terraform apply -parallelism=1`
+.
+
+**Example:**
+
+```
+// Look up the subnet
+data "phpipam_subnet" "subnet" {
+  subnet_address = "10.10.2.0"
+  subnet_mask    = 24
+}
+
+// Reserve the address. Note that we use ignore_changes here to ensure that we
+// don't end up re-allocating this address on future Terraform runs.
+resource "phpipam_first_free_address" {
+  count = 3
+
+  subnet_id   = data.phpipam_subnet.subnet.subnet_id
+  hostname    = "tf-test-host.example.internal"
+  description = "Managed by Terraform"
+
+  lifecycle {
+    ignore_changes = [
+      subnet_id,
+    ]
+  }
+}
+```
+
 #### The `phpipam_section` Resource
 
 The `phpipam_section` resource manages a PHPIPAM section - a top-level category
