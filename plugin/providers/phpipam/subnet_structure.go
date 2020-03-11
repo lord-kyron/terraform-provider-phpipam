@@ -6,8 +6,8 @@ import (
 	"strconv"
 
 	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
-	"github.com/paybyphone/phpipam-sdk-go/controllers/subnets"
-	"github.com/paybyphone/phpipam-sdk-go/phpipam"
+	"github.com/pavel-z1/phpipam-sdk-go/controllers/subnets"
+	"github.com/pavel-z1/phpipam-sdk-go/phpipam"
 )
 
 // resourceSubnetOptionalFields represents all the fields that are optional in
@@ -108,6 +108,12 @@ func bareSubnetSchema() map[string]*schema.Schema {
 		"edit_date": &schema.Schema{
 			Type: schema.TypeString,
 		},
+                "gateway": &schema.Schema{
+                        Type: schema.TypeMap,
+                },
+                "gateway_id": &schema.Schema{
+                        Type: schema.TypeString,
+                },
 		"custom_fields": &schema.Schema{
 			Type: schema.TypeMap,
 		},
@@ -219,6 +225,8 @@ func expandSubnet(d *schema.ResourceData) subnets.Subnet {
 		IsFull:         phpipam.BoolIntString(d.Get("is_full").(bool)),
 		Threshold:      d.Get("utilization_threshold").(int),
 		Location:       d.Get("location_id").(int),
+		Gateway:	d.Get("gateway").(map[string]interface {}),
+		GatewayID:        d.Get("gateway_id").(string),
 	}
 
 	return s
@@ -251,6 +259,8 @@ func flattenSubnet(s subnets.Subnet, d *schema.ResourceData) {
 	d.Set("utilization_threshold", s.Threshold)
 	d.Set("location_id", s.Location)
 	d.Set("edit_date", s.EditDate)
+	d.Set("gateway", s.Gateway)
+	d.Set("gateway_id", s.GatewayID)
 }
 
 // subnetDescriptionMatchSchema returns a *schema.Schema for description

@@ -216,15 +216,15 @@ github.com/mitchellh/mapstructure
 github.com/mitchellh/reflectwalk
 # github.com/oklog/run v1.0.0
 github.com/oklog/run
-# github.com/paybyphone/phpipam-sdk-go v0.0.0-20170420144001-da4fad4844c8
-github.com/paybyphone/phpipam-sdk-go/controllers/addresses
-github.com/paybyphone/phpipam-sdk-go/controllers/sections
-github.com/paybyphone/phpipam-sdk-go/controllers/subnets
-github.com/paybyphone/phpipam-sdk-go/controllers/vlans
-github.com/paybyphone/phpipam-sdk-go/phpipam
-github.com/paybyphone/phpipam-sdk-go/phpipam/client
-github.com/paybyphone/phpipam-sdk-go/phpipam/request
-github.com/paybyphone/phpipam-sdk-go/phpipam/session
+# github.com/pavel-z1/phpipam-sdk-go v0.0.0-20170420144001-da4fad4844c8
+github.com/pavel-z1/phpipam-sdk-go/controllers/addresses
+github.com/pavel-z1/phpipam-sdk-go/controllers/sections
+github.com/pavel-z1/phpipam-sdk-go/controllers/subnets
+github.com/pavel-z1/phpipam-sdk-go/controllers/vlans
+github.com/pavel-z1/phpipam-sdk-go/phpipam
+github.com/pavel-z1/phpipam-sdk-go/phpipam/client
+github.com/pavel-z1/phpipam-sdk-go/phpipam/request
+github.com/pavel-z1/phpipam-sdk-go/phpipam/session
 # github.com/posener/complete v1.2.1
 github.com/posener/complete
 github.com/posener/complete/cmd

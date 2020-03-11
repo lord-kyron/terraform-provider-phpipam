@@ -3,12 +3,12 @@ package phpipam
 import (
 	"log"
 
-	"github.com/paybyphone/phpipam-sdk-go/controllers/addresses"
-	"github.com/paybyphone/phpipam-sdk-go/controllers/sections"
-	"github.com/paybyphone/phpipam-sdk-go/controllers/subnets"
-	"github.com/paybyphone/phpipam-sdk-go/controllers/vlans"
-	"github.com/paybyphone/phpipam-sdk-go/phpipam"
-	"github.com/paybyphone/phpipam-sdk-go/phpipam/session"
+	"github.com/pavel-z1/phpipam-sdk-go/controllers/addresses"
+	"github.com/pavel-z1/phpipam-sdk-go/controllers/sections"
+	"github.com/pavel-z1/phpipam-sdk-go/controllers/subnets"
+	"github.com/pavel-z1/phpipam-sdk-go/controllers/vlans"
+	"github.com/pavel-z1/phpipam-sdk-go/phpipam"
+	"github.com/pavel-z1/phpipam-sdk-go/phpipam/session"
 )
 
 // Config provides the configuration for the PHPIPAM provider.
