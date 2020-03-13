@@ -3,7 +3,8 @@
 This repository is based on the original work of github user paybyphone.
 However, the version of the provider in this repo is updated and revised to support working with Terraform 12.x+
 The build here is currently based on the paybyphone original repo + hashicorp original terraform repo and was build around Terraform version 0.12.23
-All credit should go to https://github.com/paybyphone/terraform-provider-phpipam - I've just modernized his work!
+All credit should go to https://github.com/paybyphone/terraform-provider-phpipam
+Also, big thanks to https://github.com/pavel-z1/phpipam-sdk-go for his forked and updated repo which made deploying multiple resources available!
  
 # Terraform Provider Plugin for PHPIPAM
 
