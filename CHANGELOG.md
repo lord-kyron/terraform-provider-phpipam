@@ -1,3 +1,13 @@
+## 1.0
+New stuff:
+ * Added support for terraform multiple resource deployments (count) [Thanks to new repository contributor @pavel-z1]
+ * In the process @pavel-z1 forked original phpipam-sdk-go repo and commited some changes. All links leading to the original repo were changed to lead to the updated one.
+ * In the process @pavel-z1 found a bug in phpipam itself and reported it. The bug was fixed and backported for version 1.3 and 1.4, BUT keep in mind, that if you want to use the module with "count", you must apply this fix: https://github.com/phpipam/phpipam/commit/b634cb9e4e7df655f219d57e50b813733fd45afc
+ otherwise you will have to run terraform apply always with "parallelism=1" or phpipam prior to version 1.5 will not be able to handle the request. More info can be found in the bug report here:
+ https://github.com/phpipam/phpipam/issues/2960
+ * Build around latest Terraform version 0.12.23 (still API version 5)
+ * Build with latest golang v 1.14
+ 
 ## 0.3.1
 New stuff:
  * Fixed paths across the whole code
