@@ -105,6 +105,8 @@ github.com/pavel-z1/phpipam-sdk-go v0.0.0-20200311143711-d784cb582cb0 h1:CfLmotR
 github.com/pavel-z1/phpipam-sdk-go v0.0.0-20200311143711-d784cb582cb0/go.mod h1:zrdfOl0YKlE/jqc7n8uJSCn3Q0+C5Nt6Mssy050DVSw=
 github.com/pavel-z1/phpipam-sdk-go v0.0.0-20200311144439-1c4e7618bf21 h1:q45i2LAyXe7PrWpKVlV49VRE5ZFbGugWTXbZ2Lvdz1k=
 github.com/pavel-z1/phpipam-sdk-go v0.0.0-20200311144439-1c4e7618bf21/go.mod h1:zrdfOl0YKlE/jqc7n8uJSCn3Q0+C5Nt6Mssy050DVSw=
+github.com/pavel-z1/phpipam-sdk-go v0.0.0-20200313084222-d0ff3300814c h1:riyo+L8wXpXIlvLlCtI/H6UxA4KyJQBMXXqHSjjf2Yg=
+github.com/pavel-z1/phpipam-sdk-go v0.0.0-20200313084222-d0ff3300814c/go.mod h1:zrdfOl0YKlE/jqc7n8uJSCn3Q0+C5Nt6Mssy050DVSw=
 github.com/paybyphone/phpipam-sdk-go v0.0.0-20170420144001-da4fad4844c8 h1:/EEcpT2HJFyUJn+bfHBnD3JCQjdlyvO9uZBd6t4Bt3w=
 github.com/paybyphone/phpipam-sdk-go v0.0.0-20170420144001-da4fad4844c8/go.mod h1:2zM2YtU4tQp3tdMPLD0v63DczYdbQDVJOSVipqTe7ds=
 github.com/pierrec/lz4 v2.0.5+incompatible/go.mod h1:pdkljMzZIN41W+lC3N2tnIh5sFi+IEE17M5jbnwPHcY=
