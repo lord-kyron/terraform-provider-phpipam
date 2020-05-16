@@ -325,7 +325,7 @@ data "phpipam_first_free_address" "next_address" {
 
 // Reserve the address. Note that we use ignore_changes here to ensure that we
 // don't end up re-allocating this address on future Terraform runs.
-resource "phpipam_address" {
+resource "phpipam_address" "newip" {
   subnet_id   = data.phpipam_subnet.subnet.subnet_id
   ip_address  = data.phpipam_first_free_address.next_address.ip_address
   hostname    = "tf-test-host.example.internal"
@@ -441,7 +441,7 @@ data "phpipam_subnet" "subnet" {
 }
 
 // Reserve the address.
-resource "phpipam_address" {
+resource "phpipam_address" "newip"{
   subnet_id   = data.phpipam_subnet.subnet.subnet_id
   ip_address  = "10.10.2.10"
   hostname    = "tf-test-host.example.internal"
@@ -465,7 +465,7 @@ data "phpipam_first_free_address" "next_address" {
 
 // Reserve the address. Note that we use ignore_changes here to ensure that we
 // don't end up re-allocating this address on future Terraform runs.
-resource "phpipam_address" {
+resource "phpipam_address" "newip" {
   subnet_id   = data.phpipam_subnet.subnet.subnet_id
   ip_address  = data.phpipam_first_free_address.next_address.ip_address
   hostname    = "tf-test-host.example.internal"
@@ -499,7 +499,7 @@ data "phpipam_first_free_address" "next_address" {
 
 // Reserve the address. Note that we use ignore_changes here to ensure that we
 // don't end up re-allocating this address on future Terraform runs.
-resource "phpipam_address" {
+resource "phpipam_address" "newip" {
   subnet_id   = data.phpipam_subnet.subnet.subnet_id
   ip_address  = data.phpipam_first_free_address.next_address.ip_address
   hostname    = "tf-test-host.example.internal"
@@ -762,7 +762,7 @@ data "phpipam_first_free_address" "next_address" {
 
 // Reserve the address. Note that we use ignore_changes here to ensure that we
 // don't end up re-allocating this address on future Terraform runs.
-resource "phpipam_address" {
+resource "phpipam_address" "newip" {
   subnet_id   = data.phpipam_subnet.subnet.subnet_id
   ip_address  = data.phpipam_first_free_address.next_address.ip_address
   hostname    = "tf-test-host.example.internal"
