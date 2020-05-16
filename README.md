@@ -71,7 +71,7 @@ provider "phpipam" {
   endpoint = "https://phpipam.example.com/api"
   password = "PHPIPAM_PASSWORD"
   username = "Admin"
-  insecure = true
+  insecure = false
 }
 
 data "phpipam_subnet" "subnet" {
@@ -83,7 +83,7 @@ data "phpipam_first_free_address" "next_address" {
   subnet_id = data.phpipam_subnet.subnet.subnet_id
 }
 
-resource "phpipam_address" {
+resource "phpipam_address" "newip" {
   subnet_id   = data.phpipam_subnet.subnet.subnet_id
   ip_address  = data.phpipam_first_free_address.next_address.ip_address
   hostname    = "tf-test-host.example.internal"
@@ -115,7 +115,8 @@ The options for the plugin are as follows:
    config.
  * `username` - The user name to access the PHPIPAM API with. Can also be
    supplied via the `PHPIPAM_USER_NAME` variable.
- * `insecure` - Set to true to not validate the HTTPS certificate chain.
+ * `insecure` - Set to true to not validate the HTTPS certificate chain. 
+    Optional parameter, can be used only with HTTPS connections
 
 ### Data Sources
 
