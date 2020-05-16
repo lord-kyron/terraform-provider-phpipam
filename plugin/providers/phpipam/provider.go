@@ -33,6 +33,12 @@ func Provider() terraform.ResourceProvider {
 				Default:     "",
 				Description: descriptions["username"],
 			},
+			"insecure": {
+				Type:        schema.TypeBool,
+				Optional:    true,
+				Default:     false,
+				Description: descriptions["insecure"],
+			},
 		},
 
 		ResourcesMap: map[string]*schema.Resource{
@@ -65,6 +71,8 @@ func init() {
 		"endpoint": "The full URL (plus path) to the API endpoint",
 		"password": "The password of the PHPIPAM account",
 		"username": "The username of the PHPIPAM account",
+		"insecure": "Whether server should be accessed " +
+			"without verifying the TLS certificate.",
 	}
 }
 
@@ -74,6 +82,7 @@ func providerConfigure(d *schema.ResourceData) (interface{}, error) {
 		Endpoint: d.Get("endpoint").(string),
 		Password: d.Get("password").(string),
 		Username: d.Get("username").(string),
+		Insecure: d.Get("insecure").(bool),
 	}
 	return config.Client()
 }

@@ -71,6 +71,7 @@ provider "phpipam" {
   endpoint = "https://phpipam.example.com/api"
   password = "PHPIPAM_PASSWORD"
   username = "Admin"
+  insecure = true
 }
 
 data "phpipam_subnet" "subnet" {
@@ -114,6 +115,7 @@ The options for the plugin are as follows:
    config.
  * `username` - The user name to access the PHPIPAM API with. Can also be
    supplied via the `PHPIPAM_USER_NAME` variable.
+ * `insecure` - Set to true to not validate the HTTPS certificate chain.
 
 ### Data Sources
 
