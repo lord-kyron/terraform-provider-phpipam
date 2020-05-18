@@ -24,11 +24,7 @@ func (c *GraphCommand) Run(args []string) int {
 	var moduleDepth int
 	var verbose bool
 
-	args, err := c.Meta.process(args, false)
-	if err != nil {
-		return 1
-	}
-
+	args = c.Meta.process(args)
 	cmdFlags := c.Meta.defaultFlagSet("graph")
 	cmdFlags.BoolVar(&drawCycles, "draw-cycles", false, "draw-cycles")
 	cmdFlags.StringVar(&graphTypeStr, "type", "", "type")
@@ -111,13 +107,6 @@ func (c *GraphCommand) Run(args []string) int {
 		return 1
 	}
 
-	defer func() {
-		err := opReq.StateLocker.Unlock(nil)
-		if err != nil {
-			c.Ui.Error(err.Error())
-		}
-	}()
-
 	// Determine the graph type
 	graphType := terraform.GraphTypePlan
 	if plan != nil {
@@ -191,12 +180,11 @@ Options:
   -draw-cycles     Highlight any cycles in the graph with colored edges.
                    This helps when diagnosing cycle errors.
 
-  -module-depth=n  Specifies the depth of modules to show in the output.	
-                   By default this is -1, which will expand all.
-
   -type=plan       Type of graph to output. Can be: plan, plan-destroy, apply,
                    validate, input, refresh.
 
+  -module-depth=n  (deprecated) In prior versions of Terraform, specified the
+				   depth of modules to show in the output.
 `
 	return strings.TrimSpace(helpText)
 }

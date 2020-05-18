@@ -69,13 +69,7 @@ func (b *ApplyGraphBuilder) Steps() []GraphTransformer {
 	}
 
 	concreteResource := func(a *NodeAbstractResource) dag.Vertex {
-		return &NodeApplyableResource{
-			NodeAbstractResource: a,
-		}
-	}
-
-	concreteOrphanResource := func(a *NodeAbstractResource) dag.Vertex {
-		return &NodeDestroyResource{
+		return &nodeExpandApplyableResource{
 			NodeAbstractResource: a,
 		}
 	}
@@ -103,19 +97,6 @@ func (b *ApplyGraphBuilder) Steps() []GraphTransformer {
 			Concrete: concreteResourceInstance,
 			State:    b.State,
 			Changes:  b.Changes,
-		},
-
-		// Creates extra cleanup nodes for any entire resources that are
-		// no longer present in config, so we can make sure we clean up the
-		// leftover empty resource states after the instances have been
-		// destroyed.
-		// (We don't track this particular type of change in the plan because
-		// it's just cleanup of our own state object, and so doesn't effect
-		// any real remote objects or consumable outputs.)
-		&OrphanResourceTransformer{
-			Concrete: concreteOrphanResource,
-			Config:   b.Config,
-			State:    b.State,
 		},
 
 		// Create orphan output nodes
@@ -151,7 +132,12 @@ func (b *ApplyGraphBuilder) Steps() []GraphTransformer {
 
 		// Must attach schemas before ReferenceTransformer so that we can
 		// analyze the configuration to find references.
-		&AttachSchemaTransformer{Schemas: b.Schemas},
+		&AttachSchemaTransformer{Schemas: b.Schemas, Config: b.Config},
+
+		// Create expansion nodes for all of the module calls. This must
+		// come after all other transformers that create nodes representing
+		// objects that can belong to modules.
+		&ModuleExpansionTransformer{Config: b.Config},
 
 		// Connect references so ordering is correct
 		&ReferenceTransformer{},
@@ -168,23 +154,16 @@ func (b *ApplyGraphBuilder) Steps() []GraphTransformer {
 			Config:  b.Config,
 			State:   b.State,
 			Schemas: b.Schemas,
-			Destroy: b.Destroy,
 		},
 
-		// Handle destroy time transformations for output and local values.
-		// Reverse the edges from outputs and locals, so that
-		// interpolations don't fail during destroy.
 		// Create a destroy node for outputs to remove them from the state.
+		&DestroyOutputTransformer{Destroy: b.Destroy},
+
 		// Prune unreferenced values, which may have interpolations that can't
 		// be resolved.
-		GraphTransformIf(
-			func() bool { return b.Destroy },
-			GraphTransformMulti(
-				&DestroyValueReferenceTransformer{},
-				&DestroyOutputTransformer{},
-				&PruneUnusedValuesTransformer{},
-			),
-		),
+		&PruneUnusedValuesTransformer{
+			Destroy: b.Destroy,
+		},
 
 		// Add the node to fix the state count boundaries
 		&CountBoundaryTransformer{
@@ -198,8 +177,8 @@ func (b *ApplyGraphBuilder) Steps() []GraphTransformer {
 		&CloseProviderTransformer{},
 		&CloseProvisionerTransformer{},
 
-		// Single root
-		&RootTransformer{},
+		// close the root module
+		&CloseRootModuleTransformer{},
 	}
 
 	if !b.DisableReduce {

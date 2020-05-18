@@ -139,7 +139,9 @@ func marshalProviderConfigs(
 	}
 
 	for k, pc := range c.Module.ProviderConfigs {
-		schema := schemas.ProviderConfig(pc.Name)
+		// FIXME: lookup providerFqn from config
+		providerFqn := addrs.NewLegacyProvider(pc.Name)
+		schema := schemas.ProviderConfig(providerFqn)
 		p := providerConfig{
 			Name:              pc.Name,
 			Alias:             pc.Alias,
@@ -302,12 +304,12 @@ func marshalResources(resources map[string]*configs.Resource, schemas *terraform
 		}
 
 		schema, schemaVer := schemas.ResourceTypeConfig(
-			v.ProviderConfigAddr().Type,
+			v.Provider,
 			v.Mode,
 			v.Type,
 		)
 		if schema == nil {
-			return nil, fmt.Errorf("no schema found for %s", v.Addr().String())
+			return nil, fmt.Errorf("no schema found for %s (in provider %s)", v.Addr().String(), v.Provider)
 		}
 		r.SchemaVersion = schemaVer
 

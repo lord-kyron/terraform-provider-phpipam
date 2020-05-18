@@ -7,6 +7,7 @@ import (
 
 	"github.com/hashicorp/terraform/addrs"
 	"github.com/hashicorp/terraform/configs"
+	"github.com/hashicorp/terraform/plans"
 	"github.com/hashicorp/terraform/providers"
 	"github.com/hashicorp/terraform/states"
 	"github.com/hashicorp/terraform/tfdiags"
@@ -204,7 +205,7 @@ type EvalWriteState struct {
 
 	// Dependencies are the inter-resource dependencies to be stored in the
 	// state.
-	Dependencies *[]addrs.AbsResource
+	Dependencies *[]addrs.ConfigResource
 }
 
 func (n *EvalWriteState) Eval(ctx EvalContext) (interface{}, error) {
@@ -217,8 +218,8 @@ func (n *EvalWriteState) Eval(ctx EvalContext) (interface{}, error) {
 	absAddr := n.Addr.Absolute(ctx.Path())
 	state := ctx.State()
 
-	if n.ProviderAddr.ProviderConfig.Type == "" {
-		return nil, fmt.Errorf("failed to write state for %s, missing provider type", absAddr)
+	if n.ProviderAddr.Provider.Type == "" {
+		return nil, fmt.Errorf("failed to write state for %s: missing provider type", absAddr)
 	}
 	obj := *n.State
 	if obj == nil || obj.Value.IsNull() {
@@ -388,6 +389,12 @@ func (n *EvalDeposeState) Eval(ctx EvalContext) (interface{}, error) {
 type EvalMaybeRestoreDeposedObject struct {
 	Addr addrs.ResourceInstance
 
+	// PlannedChange might be the action we're performing that includes
+	// the possiblity of restoring a deposed object. However, it might also
+	// be nil. It's here only for use in error messages and must not be
+	// used for business logic.
+	PlannedChange **plans.ResourceInstanceChange
+
 	// Key is a pointer to the deposed object key that should be forgotten
 	// from the state, which must be non-nil.
 	Key *states.DeposedKey
@@ -398,6 +405,33 @@ func (n *EvalMaybeRestoreDeposedObject) Eval(ctx EvalContext) (interface{}, erro
 	absAddr := n.Addr.Absolute(ctx.Path())
 	dk := *n.Key
 	state := ctx.State()
+
+	if dk == states.NotDeposed {
+		// This should never happen, and so it always indicates a bug.
+		// We should evaluate this node only if we've previously deposed
+		// an object as part of the same operation.
+		var diags tfdiags.Diagnostics
+		if n.PlannedChange != nil && *n.PlannedChange != nil {
+			diags = diags.Append(tfdiags.Sourceless(
+				tfdiags.Error,
+				"Attempt to restore non-existent deposed object",
+				fmt.Sprintf(
+					"Terraform has encountered a bug where it would need to restore a deposed object for %s without knowing a deposed object key for that object. This occurred during a %s action. This is a bug in Terraform; please report it!",
+					absAddr, (*n.PlannedChange).Action,
+				),
+			))
+		} else {
+			diags = diags.Append(tfdiags.Sourceless(
+				tfdiags.Error,
+				"Attempt to restore non-existent deposed object",
+				fmt.Sprintf(
+					"Terraform has encountered a bug where it would need to restore a deposed object for %s without knowing a deposed object key for that object. This is a bug in Terraform; please report it!",
+					absAddr,
+				),
+			))
+		}
+		return nil, diags.Err()
+	}
 
 	restored := state.MaybeRestoreResourceInstanceDeposed(absAddr, dk)
 	if restored {
@@ -418,41 +452,48 @@ func (n *EvalMaybeRestoreDeposedObject) Eval(ctx EvalContext) (interface{}, erro
 // in that case, allowing expression evaluation to see it as a zero-element
 // list rather than as not set at all.
 type EvalWriteResourceState struct {
-	Addr         addrs.Resource
+	Addr         addrs.AbsResource
 	Config       *configs.Resource
 	ProviderAddr addrs.AbsProviderConfig
 }
 
-// TODO: test
 func (n *EvalWriteResourceState) Eval(ctx EvalContext) (interface{}, error) {
 	var diags tfdiags.Diagnostics
-	absAddr := n.Addr.Absolute(ctx.Path())
 	state := ctx.State()
 
-	count, countDiags := evaluateResourceCountExpression(n.Config.Count, ctx)
-	diags = diags.Append(countDiags)
-	if countDiags.HasErrors() {
-		return nil, diags.Err()
-	}
+	// We'll record our expansion decision in the shared "expander" object
+	// so that later operations (i.e. DynamicExpand and expression evaluation)
+	// can refer to it. Since this node represents the abstract module, we need
+	// to expand the module here to create all resources.
+	expander := ctx.InstanceExpander()
 
-	eachMode := states.NoEach
-	if count >= 0 { // -1 signals "count not set"
-		eachMode = states.EachList
-	}
+	switch {
+	case n.Config.Count != nil:
+		count, countDiags := evaluateCountExpression(n.Config.Count, ctx)
+		diags = diags.Append(countDiags)
+		if countDiags.HasErrors() {
+			return nil, diags.Err()
+		}
 
-	forEach, forEachDiags := evaluateResourceForEachExpression(n.Config.ForEach, ctx)
-	diags = diags.Append(forEachDiags)
-	if forEachDiags.HasErrors() {
-		return nil, diags.Err()
-	}
+		state.SetResourceProvider(n.Addr, n.ProviderAddr)
+		expander.SetResourceCount(n.Addr.Module, n.Addr.Resource, count)
 
-	if forEach != nil {
-		eachMode = states.EachMap
-	}
+	case n.Config.ForEach != nil:
+		forEach, forEachDiags := evaluateForEachExpression(n.Config.ForEach, ctx)
+		diags = diags.Append(forEachDiags)
+		if forEachDiags.HasErrors() {
+			return nil, diags.Err()
+		}
 
-	// This method takes care of all of the business logic of updating this
-	// while ensuring that any existing instances are preserved, etc.
-	state.SetResourceMeta(absAddr, eachMode, n.ProviderAddr)
+		// This method takes care of all of the business logic of updating this
+		// while ensuring that any existing instances are preserved, etc.
+		state.SetResourceProvider(n.Addr, n.ProviderAddr)
+		expander.SetResourceForEach(n.Addr.Module, n.Addr.Resource, forEach)
+
+	default:
+		state.SetResourceProvider(n.Addr, n.ProviderAddr)
+		expander.SetResourceSingle(n.Addr.Module, n.Addr.Resource)
+	}
 
 	return nil, nil
 }
@@ -493,7 +534,7 @@ type EvalRefreshDependencies struct {
 	// Prior State
 	State **states.ResourceInstanceObject
 	// Dependencies to write to the new state
-	Dependencies *[]addrs.AbsResource
+	Dependencies *[]addrs.ConfigResource
 }
 
 func (n *EvalRefreshDependencies) Eval(ctx EvalContext) (interface{}, error) {
@@ -503,7 +544,7 @@ func (n *EvalRefreshDependencies) Eval(ctx EvalContext) (interface{}, error) {
 		return nil, nil
 	}
 
-	depMap := make(map[string]addrs.AbsResource)
+	depMap := make(map[string]addrs.ConfigResource)
 	for _, d := range *n.Dependencies {
 		depMap[d.String()] = d
 	}
@@ -517,7 +558,7 @@ func (n *EvalRefreshDependencies) Eval(ctx EvalContext) (interface{}, error) {
 		return nil, nil
 	}
 
-	deps := make([]addrs.AbsResource, 0, len(depMap))
+	deps := make([]addrs.ConfigResource, 0, len(depMap))
 	for _, d := range depMap {
 		deps = append(deps, d)
 	}

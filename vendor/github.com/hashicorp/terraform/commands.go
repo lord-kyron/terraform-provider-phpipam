@@ -6,12 +6,13 @@ import (
 
 	"github.com/mitchellh/cli"
 
-	"github.com/hashicorp/terraform-svchost"
+	svchost "github.com/hashicorp/terraform-svchost"
 	"github.com/hashicorp/terraform-svchost/auth"
 	"github.com/hashicorp/terraform-svchost/disco"
 	"github.com/hashicorp/terraform/command"
 	"github.com/hashicorp/terraform/command/cliconfig"
 	"github.com/hashicorp/terraform/command/webbrowser"
+	"github.com/hashicorp/terraform/internal/getproviders"
 	pluginDiscovery "github.com/hashicorp/terraform/plugin/discovery"
 )
 
@@ -37,7 +38,7 @@ const (
 	OutputPrefix = "o:"
 )
 
-func initCommands(config *Config, services *disco.Disco) {
+func initCommands(config *cliconfig.Config, services *disco.Disco, providerSrc getproviders.Source) {
 	var inAutomation bool
 	if v := os.Getenv(runningInAutomationEnvName); v != "" {
 		inAutomation = true
@@ -67,6 +68,7 @@ func initCommands(config *Config, services *disco.Disco) {
 		Ui:               Ui,
 
 		Services:        services,
+		ProviderSource:  providerSrc,
 		BrowserLauncher: webbrowser.NewNativeLauncher(),
 
 		RunningInAutomation: inAutomation,
@@ -89,6 +91,7 @@ func initCommands(config *Config, services *disco.Disco) {
 		"force-unlock": struct{}{},
 		"push":         struct{}{},
 		"0.12upgrade":  struct{}{},
+		"0.13upgrade":  struct{}{},
 	}
 
 	Commands = map[string]cli.CommandFactory{
@@ -182,15 +185,17 @@ func initCommands(config *Config, services *disco.Disco) {
 			}, nil
 		},
 
-		// "terraform login" is disabled until Terraform Cloud is ready to
-		// support it.
-		/*
-			"login": func() (cli.Command, error) {
-				return &command.LoginCommand{
-					Meta: meta,
-				}, nil
-			},
-		*/
+		"login": func() (cli.Command, error) {
+			return &command.LoginCommand{
+				Meta: meta,
+			}, nil
+		},
+
+		"logout": func() (cli.Command, error) {
+			return &command.LogoutCommand{
+				Meta: meta,
+			}, nil
+		},
 
 		"output": func() (cli.Command, error) {
 			return &command.OutputCommand{
@@ -303,19 +308,19 @@ func initCommands(config *Config, services *disco.Disco) {
 		//-----------------------------------------------------------
 
 		"0.12upgrade": func() (cli.Command, error) {
-			return &command.ZeroTwelveUpgradeCommand{
+			return &command.ZeroThirteenUpgradeCommand{
+				Meta: meta,
+			}, nil
+		},
+
+		"0.13upgrade": func() (cli.Command, error) {
+			return &command.ZeroThirteenUpgradeCommand{
 				Meta: meta,
 			}, nil
 		},
 
 		"debug": func() (cli.Command, error) {
 			return &command.DebugCommand{
-				Meta: meta,
-			}, nil
-		},
-
-		"debug json2dot": func() (cli.Command, error) {
-			return &command.DebugJSON2DotCommand{
 				Meta: meta,
 			}, nil
 		},
@@ -369,6 +374,14 @@ func initCommands(config *Config, services *disco.Disco) {
 				Meta: meta,
 			}, nil
 		},
+
+		"state replace-provider": func() (cli.Command, error) {
+			return &command.StateReplaceProviderCommand{
+				StateMeta: command.StateMeta{
+					Meta: meta,
+				},
+			}, nil
+		},
 	}
 }
 
@@ -390,7 +403,7 @@ func makeShutdownCh() <-chan struct{} {
 	return resultCh
 }
 
-func credentialsSource(config *Config) (auth.CredentialsSource, error) {
+func credentialsSource(config *cliconfig.Config) (auth.CredentialsSource, error) {
 	helperPlugins := pluginDiscovery.FindPlugins("credentials", globalPluginDirs())
 	return config.CredentialsSource(helperPlugins)
 }

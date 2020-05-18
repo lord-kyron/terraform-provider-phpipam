@@ -124,7 +124,10 @@ func TestPlan_destroy(t *testing.T) {
 				AttrsJSON: []byte(`{"id":"bar"}`),
 				Status:    states.ObjectReady,
 			},
-			addrs.ProviderConfig{Type: "test"}.Absolute(addrs.RootModuleInstance),
+			addrs.AbsProviderConfig{
+				Provider: addrs.NewDefaultProvider("test"),
+				Module:   addrs.RootModule,
+			},
 		)
 	})
 	outPath := testTempFile(t)
@@ -240,7 +243,10 @@ func TestPlan_outPathNoChange(t *testing.T) {
 				AttrsJSON: []byte(`{"id":"bar","ami":"bar","network_interface":[{"description":"Main network interface","device_index":"0"}]}`),
 				Status:    states.ObjectReady,
 			},
-			addrs.ProviderConfig{Type: "test"}.Absolute(addrs.RootModuleInstance),
+			addrs.AbsProviderConfig{
+				Provider: addrs.NewDefaultProvider("test"),
+				Module:   addrs.RootModule,
+			},
 		)
 	})
 	statePath := testStateFile(t, originalState)
@@ -280,26 +286,23 @@ func TestPlan_outBackend(t *testing.T) {
 	defer os.RemoveAll(td)
 	defer testChdir(t, td)()
 
-	// Our state
-	originalState := &terraform.State{
-		Modules: []*terraform.ModuleState{
-			&terraform.ModuleState{
-				Path: []string{"root"},
-				Resources: map[string]*terraform.ResourceState{
-					"test_instance.foo": &terraform.ResourceState{
-						Type: "test_instance",
-						Primary: &terraform.InstanceState{
-							ID: "bar",
-							Attributes: map[string]string{
-								"ami": "bar",
-							},
-						},
-					},
-				},
+	originalState := states.BuildState(func(s *states.SyncState) {
+		s.SetResourceInstanceCurrent(
+			addrs.Resource{
+				Mode: addrs.ManagedResourceMode,
+				Type: "test_instance",
+				Name: "foo",
+			}.Instance(addrs.NoKey).Absolute(addrs.RootModuleInstance),
+			&states.ResourceInstanceObjectSrc{
+				AttrsJSON: []byte(`{"id":"bar","ami":"bar"}`),
+				Status:    states.ObjectReady,
 			},
-		},
-	}
-	originalState.Init()
+			addrs.AbsProviderConfig{
+				Provider: addrs.NewDefaultProvider("test"),
+				Module:   addrs.RootModule,
+			},
+		)
+	})
 
 	// Setup our backend state
 	dataState, srv := testBackendState(t, originalState, 200)
@@ -848,6 +851,34 @@ func TestPlan_shutdown(t *testing.T) {
 	case <-cancelled:
 	default:
 		t.Error("command not cancelled")
+	}
+}
+
+func TestPlan_init_required(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+	if err := os.Chdir(testFixturePath("plan")); err != nil {
+		t.Fatalf("err: %s", err)
+	}
+	defer os.Chdir(cwd)
+
+	ui := new(cli.MockUi)
+	c := &PlanCommand{
+		Meta: Meta{
+			// Running plan without setting testingOverrides is similar to plan without init
+			Ui: ui,
+		},
+	}
+
+	args := []string{}
+	if code := c.Run(args); code != 1 {
+		t.Fatalf("expected error, got success")
+	}
+	output := ui.ErrorWriter.String()
+	if !strings.Contains(output, `Plugin reinitialization required. Please run "terraform init".`) {
+		t.Fatal("wrong error message in output:", output)
 	}
 }
 

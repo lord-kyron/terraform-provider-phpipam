@@ -100,6 +100,12 @@ func tempDir(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}
+
+	dir, err = filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	if err := os.RemoveAll(dir); err != nil {
 		t.Fatalf("err: %s", err)
 	}
@@ -113,21 +119,17 @@ func testFixturePath(name string) string {
 
 func metaOverridesForProvider(p providers.Interface) *testingOverrides {
 	return &testingOverrides{
-		ProviderResolver: providers.ResolverFixed(
-			map[string]providers.Factory{
-				"test": providers.FactoryFixed(p),
-			},
-		),
+		Providers: map[addrs.Provider]providers.Factory{
+			addrs.NewDefaultProvider("test"): providers.FactoryFixed(p),
+		},
 	}
 }
 
 func metaOverridesForProviderAndProvisioner(p providers.Interface, pr provisioners.Interface) *testingOverrides {
 	return &testingOverrides{
-		ProviderResolver: providers.ResolverFixed(
-			map[string]providers.Factory{
-				"test": providers.FactoryFixed(p),
-			},
-		),
+		Providers: map[addrs.Provider]providers.Factory{
+			addrs.NewDefaultProvider("test"): providers.FactoryFixed(p),
+		},
 		Provisioners: map[string]provisioners.Factory{
 			"shell": provisioners.FactoryFixed(pr),
 		},
@@ -262,12 +264,13 @@ func testState() *states.State {
 				// of all of the containing wrapping objects and arrays.
 				AttrsJSON:    []byte("{\n            \"id\": \"bar\"\n          }"),
 				Status:       states.ObjectReady,
-				Dependencies: []addrs.AbsResource{},
+				Dependencies: []addrs.ConfigResource{},
 				DependsOn:    []addrs.Referenceable{},
 			},
-			addrs.ProviderConfig{
-				Type: "test",
-			}.Absolute(addrs.RootModuleInstance),
+			addrs.AbsProviderConfig{
+				Provider: addrs.NewDefaultProvider("test"),
+				Module:   addrs.RootModule,
+			},
 		)
 		// DeepCopy is used here to ensure our synthetic state matches exactly
 		// with a state that will have been copied during the command
@@ -486,6 +489,11 @@ func testTempDir(t *testing.T) string {
 		t.Fatalf("err: %s", err)
 	}
 
+	d, err = filepath.EvalSymlinks(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	return d
 }
 
@@ -693,7 +701,7 @@ func testInputMap(t *testing.T, answers map[string]string) func() {
 // be returned about the backend configuration having changed and that
 // "terraform init" must be run, since the test backend config cache created
 // by this function contains the hash for an empty configuration.
-func testBackendState(t *testing.T, s *terraform.State, c int) (*terraform.State, *httptest.Server) {
+func testBackendState(t *testing.T, s *states.State, c int) (*terraform.State, *httptest.Server) {
 	t.Helper()
 
 	var b64md5 string
@@ -715,8 +723,8 @@ func testBackendState(t *testing.T, s *terraform.State, c int) (*terraform.State
 
 	// If a state was given, make sure we calculate the proper b64md5
 	if s != nil {
-		enc := json.NewEncoder(buf)
-		if err := enc.Encode(s); err != nil {
+		err := statefile.Write(&statefile.File{State: s}, buf)
+		if err != nil {
 			t.Fatalf("err: %v", err)
 		}
 		md5 := md5.Sum(buf.Bytes())
@@ -867,4 +875,12 @@ func normalizeJSON(t *testing.T, src []byte) string {
 		t.Fatalf("error normalizing JSON: %s", err)
 	}
 	return buf.String()
+}
+
+func mustResourceAddr(s string) addrs.ConfigResource {
+	addr, diags := addrs.ParseAbsResourceStr(s)
+	if diags.HasErrors() {
+		panic(diags.Err())
+	}
+	return addr.Config()
 }

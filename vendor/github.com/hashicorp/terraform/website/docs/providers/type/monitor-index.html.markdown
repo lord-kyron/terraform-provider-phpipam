@@ -19,6 +19,7 @@ HashiCorp, and are tested by HashiCorp.
 ---
 
 
+- [Auth0](/docs/providers/auth0/index.html)
 - [Circonus](/docs/providers/circonus/index.html)
 - [Datadog](/docs/providers/datadog/index.html)
 - [Dyn](/docs/providers/dyn/index.html)
@@ -34,3 +35,4 @@ HashiCorp, and are tested by HashiCorp.
 - [Runscope](/docs/providers/runscope/index.html)
 - [SignalFx](/docs/providers/signalfx/index.html)
 - [StatusCake](/docs/providers/statuscake/index.html)
+- [Sumo Logic](/docs/providers/sumologic/index.html)

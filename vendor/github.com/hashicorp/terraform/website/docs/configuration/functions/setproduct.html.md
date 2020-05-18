@@ -55,7 +55,7 @@ resources.
 ]
 ```
 
-You must past at least two arguments to this function.
+You must pass at least two arguments to this function.
 
 Although defined primarily for sets, this function can also work with lists.
 If all of the given arguments are lists then the result is a list, preserving
@@ -224,5 +224,6 @@ elements in the input variables.
   object types are defined explicitly.
 * [`setintersection`](./setintersection.html) computes the _intersection_ of
   multiple sets.
+* [`setsubtract`](./setsubtract.html) computes the _relative complement_ of two sets
 * [`setunion`](./setunion.html) computes the _union_ of multiple
   sets.
