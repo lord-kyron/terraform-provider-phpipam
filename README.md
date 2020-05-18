@@ -1,4 +1,4 @@
-# Terraform PHPIPAM provider - version 1.0
+# Terraform PHPIPAM provider - version 1.1
 # ATTENTION!!! 
 This repository is based on the original work of github user paybyphone.
 However, the version of the provider in this repo is updated and revised to support working with Terraform 12.x+
