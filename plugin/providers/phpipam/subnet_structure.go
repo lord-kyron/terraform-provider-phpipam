@@ -28,7 +28,7 @@ var resourceSubnetOptionalFields = linearSearchSlice{
 	"allow_ip_requests",
 	"scan_agent_id",
 	"include_in_ping",
-	"host_discover_enabled",
+	"host_discovery_enabled",
 	"is_full",
 	"utilization_threshold",
 }
