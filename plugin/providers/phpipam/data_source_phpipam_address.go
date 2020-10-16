@@ -2,7 +2,8 @@ package phpipam
 
 import (
 	"errors"
-        "log"
+	"log"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
 	"github.com/pavel-z1/phpipam-sdk-go/controllers/addresses"
@@ -16,7 +17,7 @@ func dataSourcePHPIPAMAddress() *schema.Resource {
 }
 
 func dataSourcePHPIPAMAddressRead(d *schema.ResourceData, meta interface{}) error {
-        log.Printf("[DEBUG] Start Reading IP Address ..............")
+	log.Printf("[DEBUG] Start Reading IP Address ..............")
 	c := meta.(*ProviderPHPIPAMClient).addressesController
 	out := make([]addresses.Address, 1)
 	var err error
@@ -26,6 +27,13 @@ func dataSourcePHPIPAMAddressRead(d *schema.ResourceData, meta interface{}) erro
 	case d.Get("address_id").(int) != 0:
 		out[0], err = c.GetAddressByID(d.Get("address_id").(int))
 		if err != nil {
+			if strings.Contains(err.Error(), "Invalid Id") {
+				log.Printf("[DEBUG] Invalid Id Seen")
+				log.Printf(err.Error())
+				// IP not found by id
+				d.SetId("")
+				return nil
+			}
 			return err
 		}
 	case d.Get("ip_address").(string) != "":
