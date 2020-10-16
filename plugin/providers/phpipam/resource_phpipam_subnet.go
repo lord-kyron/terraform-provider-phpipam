@@ -3,7 +3,6 @@ package phpipam
 import (
 	"errors"
 	"fmt"
-	"github.com/pavel-z1/phpipam-sdk-go/phpipam"
 	"strconv"
 	"strings"
 
@@ -45,9 +44,6 @@ func resourcePHPIPAMSubnetCreate(d *schema.ResourceData, meta interface{}) error
 
 		netAndMask := strings.Split(res, "/")
 		maskNum, _ := strconv.Atoi(netAndMask[1])
-
-		in.SubnetAddress = netAndMask[0]
-		in.Mask = phpipam.JSONIntString(maskNum)
 
 		d.Set("subnet_address", netAndMask[0])
 		d.Set("subnet_mask", maskNum)
