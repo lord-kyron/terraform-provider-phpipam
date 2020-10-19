@@ -108,14 +108,17 @@ func bareSubnetSchema() map[string]*schema.Schema {
 		"edit_date": &schema.Schema{
 			Type: schema.TypeString,
 		},
-                "gateway": &schema.Schema{
-                        Type: schema.TypeMap,
-                },
-                "gateway_id": &schema.Schema{
-                        Type: schema.TypeString,
-                },
+		"gateway": &schema.Schema{
+			Type: schema.TypeMap,
+		},
+		"gateway_id": &schema.Schema{
+			Type: schema.TypeString,
+		},
 		"custom_fields": &schema.Schema{
 			Type: schema.TypeMap,
+		},
+		"parent_subnet_id": &schema.Schema{
+			Type: schema.TypeInt,
 		},
 	}
 }
@@ -129,13 +132,21 @@ func resourceSubnetSchema() map[string]*schema.Schema {
 	for k, v := range schema {
 		switch {
 		// Subnet Address and Mask are currently ForceNew
-		case k == "subnet_address" || k == "subnet_mask":
+		case k == "subnet_address":
+			v.Optional = true
+			v.Computed = true
+			v.ForceNew = true
+			v.ConflictsWith = []string{"parent_subnet_id"}
+		case k == "subnet_mask":
 			v.Required = true
 			v.ForceNew = true
 		case k == "section_id":
 			v.Required = true
 		case k == "custom_fields":
 			v.Optional = true
+		case k == "parent_subnet_id":
+			v.Optional = true
+			v.ConflictsWith = []string{"subnet_id"}
 		case resourceSubnetOptionalFields.Has(k):
 			v.Optional = true
 			v.Computed = true
@@ -225,8 +236,8 @@ func expandSubnet(d *schema.ResourceData) subnets.Subnet {
 		IsFull:         phpipam.BoolIntString(d.Get("is_full").(bool)),
 		Threshold:      d.Get("utilization_threshold").(int),
 		Location:       d.Get("location_id").(int),
-		Gateway:	d.Get("gateway").(map[string]interface {}),
-		GatewayID:        d.Get("gateway_id").(string),
+		Gateway:        d.Get("gateway").(map[string]interface{}),
+		GatewayID:      d.Get("gateway_id").(string),
 	}
 
 	return s

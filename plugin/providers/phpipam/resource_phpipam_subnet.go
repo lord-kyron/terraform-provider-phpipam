@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
 )
@@ -30,8 +31,24 @@ func resourcePHPIPAMSubnetCreate(d *schema.ResourceData, meta interface{}) error
 	// Assert the ID field here is empty. If this is not empty the request will fail.
 	in.ID = 0
 
-	if _, err := c.CreateSubnet(in); err != nil {
-		return err
+	if _, ok := d.GetOk("subnet_address"); ok {
+		if _, err := c.CreateSubnet(in); err != nil {
+			return err
+		}
+	} else if parentSubnetId, ok := d.GetOk("parent_subnet_id"); ok {
+		res, err := c.CreateFirstFreeSubnet(parentSubnetId.(int), d.Get("subnet_mask").(int), in)
+
+		if err != nil {
+			return err
+		}
+
+		netAndMask := strings.Split(res, "/")
+		maskNum, _ := strconv.Atoi(netAndMask[1])
+
+		d.Set("subnet_address", netAndMask[0])
+		d.Set("subnet_mask", maskNum)
+	} else {
+		return errors.New("Unsupported scenario! One of 'subnet_address' or 'parent_subnet_id' must be set")
 	}
 
 	// If we have custom fields, set them now. We need to get the subnet's ID
