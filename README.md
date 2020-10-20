@@ -1,11 +1,11 @@
 # Terraform PHPIPAM provider - version 1.1
-# ATTENTION!!! 
+# ATTENTION!!!
 This repository is based on the original work of github user paybyphone.
 However, the version of the provider in this repo is updated and revised to support working with Terraform 12.x+
 The build here is currently based on the paybyphone original repo + hashicorp original terraform repo and was build around Terraform version 0.12.23
 All credit should go to https://github.com/paybyphone/terraform-provider-phpipam
 Also, big thanks to https://github.com/pavel-z1/phpipam-sdk-go for his forked and updated repo which made deploying multiple resources available!
- 
+
 # Terraform Provider Plugin for PHPIPAM
 
 This repository holds a external plugin for a [Terraform][1] provider to manage
@@ -100,7 +100,7 @@ resource "phpipam_address" "newip" {
 
 ### Plugin Options
 
-The options for the plugin are as follows: 
+The options for the plugin are as follows:
 
  * `app_id` - The API application ID, configured in the PHPIPAM API panel. This
    application ID should have read/write access if you are planning to use the
@@ -115,7 +115,7 @@ The options for the plugin are as follows:
    config.
  * `username` - The user name to access the PHPIPAM API with. Can also be
    supplied via the `PHPIPAM_USER_NAME` variable.
- * `insecure` - Set to true to not validate the HTTPS certificate chain. 
+ * `insecure` - Set to true to not validate the HTTPS certificate chain.
     Optional parameter, can be used only with HTTPS connections
 
 ### Data Sources
@@ -190,7 +190,7 @@ The data source takes the following parameters:
  * `custom_field_filter` - A map of custom fields to search for. The filter
    values are regular expressions that follow the RE2 syntax for which you can
    find documentation [here](https://github.com/google/re2/wiki/Syntax). All
-   fields need to match for the match to succeed. 
+   fields need to match for the match to succeed.
 
 ⚠️  **NOTE:** `description`, `hostname`, and `custom_field_filter` fields return
 the first match found without any warnings. If you are looking to return
@@ -284,7 +284,7 @@ One of the following fields is required alongside `subnet_id`:
  * `custom_field_filter` - A map of custom fields to search for. The filter
    values are regular expressions that follow the RE2 syntax for which you can
    find documentation [here](https://github.com/google/re2/wiki/Syntax). All
-   fields need to match for the match to succeed. 
+   fields need to match for the match to succeed.
 
 ⚠️  **NOTE:** An empty or unspecified `custom_field_filter` value is the
 equivalent to a regular expression that matches everything, and hence will
@@ -359,19 +359,48 @@ resource "vsphere_virtual_machine" "web" {
     network_interface,
   ]
 }
+
 ```
+##### The `phpipam_first_free_subnet` Data Source
+
+The `phpipam_first_free_subnet` data source allows you to get the next
+available subnet address in a specific subnet in PHPIPAM. Using this resource allows
+you to automatically allocate an subnet CIDR address that can be used as an CIDR in
+resources such as `aws VPC`, or other public or private cloud that require CIDR range.
+
+Note that not having any subnet available will cause the Terraform run to
+fail. Conversely, marking a subnet as unavailable or used will not prevent this
+data source from returning an next available subnet address, so be aware of this while
+using this resource.
+
+**Example:**
+
+```
+// Look up the subnet
+data "phpipam_subnet" "subnet" {
+  subnet_address = "10.10.2.0"
+  subnet_mask    = 24
+}
+
+// Get the first available address
+data "phpipam_first_free_subnet" "next_subnet" {
+  subnet_id = data.phpipam_subnet.subnet.subnet_id
+  subnet_mask = 25
+}
 
 ##### Argument Reference
 
 The data source takes the following parameters:
 
- * `subnet_id` - The ID of the subnet to look up the address in.
+ * `subnet_id` - The ID of the subnet to look up the subnet in.
+ * `subnet_mask` - Mask that will be used to look next available subnet
 
 ##### Attribute Reference
 
 The following attributes are exported:
 
  * `ip_address` - The next available IP address.
+```
 
 #### The `phpipam_section` Data Source
 
@@ -551,7 +580,7 @@ The data source takes the following parameters:
  * `custom_field_filter` - A map of custom fields to search for. The filter
    values are regular expressions that follow the RE2 syntax for which you can
    find documentation [here](https://github.com/google/re2/wiki/Syntax). All
-   fields need to match for the match to succeed. 
+   fields need to match for the match to succeed.
 
 ⚠️  **NOTE:** Searches with the `description`, `description_match` and
 `custom_field_filter` fields return the first match found without any warnings.
@@ -662,7 +691,7 @@ One of the following below parameters is required:
    for a subnet.
  * `custom_field_filter` - A map of custom fields to search for. The filter
    values are regular expressions. All fields need to match for the match to
-   succeed. 
+   succeed.
 
 You can find documentation for the regular expression syntax used with the
 `description_match` and `custom_field_filter` attributes
@@ -737,7 +766,7 @@ The following resources are supplied by this plugin:
 The `phpipam_address` resource manages an IP address in PHPIPAM. You can use it
 to create IP address reservations for IP addresses that have been created by
 other Terraform resources, or supplied by the `phpipam_first_free_address` data
-source. An example usage is below. 
+source. An example usage is below.
 
 ⚠️  **NOTE:** If you are using the `phpipam_first_free_address` to get the first
 free IP address in a specific subnet, make sure you set `subnet_id` and
@@ -826,9 +855,44 @@ The following attributes are exported:
  * `last_seen` - The last time this IP address answered ping probes.
  * `edit_date` - The last time this resource was modified.
 
+ #### The `phpipam_first_free_subnet` Resource - Dynamic IPs creation
+
+ The `phpipam_first_free_subnet` resource allow to create automatically
+ new subnet in defined network without execution Terraform data instruction. You can use it
+ to create several subnets automatically with nested subnet creation allowed. This resource
+ support the same arguments as phpipam_subnet. An example usage is below.
+
+
+ ```
+ // Look up the subnet
+ data "phpipam_subnet" "subnet" {
+   subnet_address = "10.10.2.0"
+   subnet_mask    = 22
+ }
+
+
+ resource "phpipam_first_free_subnet" "new_subnet" {
+   parent_subnet_id   = data.phpipam_subnet.subnet.subnet_id
+   subnet_mask = 24
+   description = "Managed by Terraform"
+ }
+
+ resource "phpipam_first_free_subnet" "Child_subnet_of_new_subnet" {
+   parent_subnet_id   = phpipam_first_free_subnet.new_subnet.subnet_id
+   subnet_mask = 24
+   description = "Managed by Terraform"
+ }
+ resource "phpipam_first_free_subnet" "Child_subnet_of_new_subnet" {
+   parent_subnet_id   = phpipam_first_free_subnet.new_subnet.subnet_id
+   subnet_mask = 24
+   description = "Managed by Terraform"
+ }
+
+ ```
+
 #### The `phpipam_first_free_address` Resource - Dynamic IPs creation
 
-The `phpipam_first_free_address` resource allow to create automatically 
+The `phpipam_first_free_address` resource allow to create automatically
 new IP in defined network without execution Terraform data instruction. You can use it
 to create several IP addresses automatically. This resource support the same arguments as
 phpipam_address.  An example usage is below.
