@@ -857,8 +857,8 @@ The following attributes are exported:
 
  #### The `phpipam_first_free_subnet` Resource - Dynamic IPs creation
 
- The `phpipam_first_free_subnet` resource allow to create automatically
- new subnet in defined network without execution Terraform data instruction. You can use it
+ The `phpipam_first_free_subnet` resource allow you to create new subnet automatically
+ in defined network without execution Terraform data instruction. You can use it
  to create several subnets automatically with nested subnet creation allowed. This resource
  support the same arguments as phpipam_subnet. An example usage is below.
 
@@ -879,12 +879,12 @@ The following attributes are exported:
 
  resource "phpipam_first_free_subnet" "Child_subnet_of_new_subnet" {
    parent_subnet_id   = phpipam_first_free_subnet.new_subnet.subnet_id
-   subnet_mask = 24
+   subnet_mask = 25
    description = "Managed by Terraform"
  }
  resource "phpipam_first_free_subnet" "Child_subnet_of_new_subnet" {
    parent_subnet_id   = phpipam_first_free_subnet.new_subnet.subnet_id
-   subnet_mask = 24
+   subnet_mask = 25
    description = "Managed by Terraform"
  }
 
