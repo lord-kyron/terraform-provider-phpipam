@@ -636,8 +636,8 @@ data "phpipam_subnets" "subnet_search" {
 }
 
 data "phpipam_subnet" "subnets" {
-  count      = length(data.phpipam_subnets.subnet_search.subnet_ids)
-  address_id = element(data.phpipam_subnets.subnet_search.subnet_ids, count.index)
+  count     = length(data.phpipam_subnets.subnet_search.subnet_ids)
+  subnet_id = element(data.phpipam_subnets.subnet_search.subnet_ids, count.index)
 }
 
 output "subnet_addresses" {
