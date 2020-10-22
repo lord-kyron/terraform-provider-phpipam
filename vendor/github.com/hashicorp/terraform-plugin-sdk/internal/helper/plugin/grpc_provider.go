@@ -1,68 +1,50 @@
 package plugin
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"strconv"
-	"sync"
 
-	"github.com/hashicorp/go-cty/cty"
-	ctyconvert "github.com/hashicorp/go-cty/cty/convert"
-	"github.com/hashicorp/go-cty/cty/msgpack"
+	"github.com/zclconf/go-cty/cty"
+	ctyconvert "github.com/zclconf/go-cty/cty/convert"
+	"github.com/zclconf/go-cty/cty/msgpack"
+	context "golang.org/x/net/context"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/internal/configs/configschema"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/internal/configs/hcl2shim"
-	c "github.com/hashicorp/terraform-plugin-sdk/v2/internal/helper/plugin/context"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/internal/plans/objchange"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/internal/plugin/convert"
-	proto "github.com/hashicorp/terraform-plugin-sdk/v2/internal/tfplugin5"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/internal/configs/configschema"
+	"github.com/hashicorp/terraform-plugin-sdk/internal/configs/hcl2shim"
+	"github.com/hashicorp/terraform-plugin-sdk/internal/plans/objchange"
+	"github.com/hashicorp/terraform-plugin-sdk/internal/plugin/convert"
+	proto "github.com/hashicorp/terraform-plugin-sdk/internal/tfplugin5"
+	"github.com/hashicorp/terraform-plugin-sdk/terraform"
 )
 
 const newExtraKey = "_new_extra_shim"
 
-func NewGRPCProviderServer(p *schema.Provider) *GRPCProviderServer {
+// NewGRPCProviderServerShim wraps a terraform.ResourceProvider in a
+// proto.ProviderServer implementation. If the provided provider is not a
+// *schema.Provider, this will return nil,
+func NewGRPCProviderServerShim(p terraform.ResourceProvider) *GRPCProviderServer {
+	sp, ok := p.(*schema.Provider)
+	if !ok {
+		return nil
+	}
+
 	return &GRPCProviderServer{
-		provider: p,
-		stopCh:   make(chan struct{}),
+		provider: sp,
 	}
 }
 
 // GRPCProviderServer handles the server, or plugin side of the rpc connection.
 type GRPCProviderServer struct {
 	provider *schema.Provider
-	stopCh   chan struct{}
-	stopMu   sync.Mutex
-}
-
-// mergeStop is called in a goroutine and waits for the global stop signal
-// and propagates cancellation to the passed in ctx/cancel func. The ctx is
-// also passed to this function and waited upon so no goroutine leak is caused.
-func mergeStop(ctx context.Context, cancel context.CancelFunc, stopCh chan struct{}) {
-	select {
-	case <-ctx.Done():
-		return
-	case <-stopCh:
-		cancel()
-	}
-}
-
-// StopContext derives a new context from the passed in grpc context.
-// It creates a goroutine to wait for the server stop and propagates
-// cancellation to the derived grpc context.
-func (s *GRPCProviderServer) StopContext(ctx context.Context) context.Context {
-	s.stopMu.Lock()
-	defer s.stopMu.Unlock()
-
-	stoppable, cancel := context.WithCancel(ctx)
-	go mergeStop(stoppable, cancel, s.stopCh)
-	return stoppable
 }
 
 func (s *GRPCProviderServer) GetSchema(_ context.Context, req *proto.GetProviderSchema_Request) (*proto.GetProviderSchema_Response, error) {
+	// Here we are certain that the provider is being called through grpc, so
+	// make sure the feature flag for helper/schema is set
+	schema.SetProto5()
 
 	resp := &proto.GetProviderSchema_Response{
 		ResourceSchemas:   make(map[string]*proto.Schema),
@@ -71,10 +53,6 @@ func (s *GRPCProviderServer) GetSchema(_ context.Context, req *proto.GetProvider
 
 	resp.Provider = &proto.Schema{
 		Block: convert.ConfigSchemaToProto(s.getProviderSchemaBlock()),
-	}
-
-	resp.ProviderMeta = &proto.Schema{
-		Block: convert.ConfigSchemaToProto(s.getProviderMetaSchemaBlock()),
 	}
 
 	for typ, res := range s.provider.ResourcesMap {
@@ -96,10 +74,6 @@ func (s *GRPCProviderServer) GetSchema(_ context.Context, req *proto.GetProvider
 
 func (s *GRPCProviderServer) getProviderSchemaBlock() *configschema.Block {
 	return schema.InternalMap(s.provider.Schema).CoreConfigSchema()
-}
-
-func (s *GRPCProviderServer) getProviderMetaSchemaBlock() *configschema.Block {
-	return schema.InternalMap(s.provider.ProviderMetaSchema).CoreConfigSchema()
 }
 
 func (s *GRPCProviderServer) getResourceSchemaBlock(name string) *configschema.Block {
@@ -150,7 +124,7 @@ func (s *GRPCProviderServer) PrepareProviderConfig(_ context.Context, req *proto
 		}
 
 		// this is deprecated, so don't set it
-		if attrSchema.Deprecated != "" {
+		if attrSchema.Deprecated != "" || attrSchema.Removed != "" {
 			return val, nil
 		}
 
@@ -202,7 +176,8 @@ func (s *GRPCProviderServer) PrepareProviderConfig(_ context.Context, req *proto
 
 	config := terraform.NewResourceConfigShimmed(configVal, schemaBlock)
 
-	resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, s.provider.Validate(config))
+	warns, errs := s.provider.Validate(config)
+	resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, convert.WarnsAndErrsToProto(warns, errs))
 
 	preparedConfigMP, err := msgpack.Marshal(configVal, schemaBlock.ImpliedType())
 	if err != nil {
@@ -228,7 +203,8 @@ func (s *GRPCProviderServer) ValidateResourceTypeConfig(_ context.Context, req *
 
 	config := terraform.NewResourceConfigShimmed(configVal, schemaBlock)
 
-	resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, s.provider.ValidateResource(req.TypeName, config))
+	warns, errs := s.provider.ValidateResource(req.TypeName, config)
+	resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, convert.WarnsAndErrsToProto(warns, errs))
 
 	return resp, nil
 }
@@ -252,19 +228,16 @@ func (s *GRPCProviderServer) ValidateDataSourceConfig(_ context.Context, req *pr
 
 	config := terraform.NewResourceConfigShimmed(configVal, schemaBlock)
 
-	resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, s.provider.ValidateDataSource(req.TypeName, config))
+	warns, errs := s.provider.ValidateDataSource(req.TypeName, config)
+	resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, convert.WarnsAndErrsToProto(warns, errs))
 
 	return resp, nil
 }
 
-func (s *GRPCProviderServer) UpgradeResourceState(ctx context.Context, req *proto.UpgradeResourceState_Request) (*proto.UpgradeResourceState_Response, error) {
+func (s *GRPCProviderServer) UpgradeResourceState(_ context.Context, req *proto.UpgradeResourceState_Request) (*proto.UpgradeResourceState_Response, error) {
 	resp := &proto.UpgradeResourceState_Response{}
 
-	res, ok := s.provider.ResourcesMap[req.TypeName]
-	if !ok {
-		resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, fmt.Errorf("unknown resource type: %s", req.TypeName))
-		return resp, nil
-	}
+	res := s.provider.ResourcesMap[req.TypeName]
 	schemaBlock := s.getResourceSchemaBlock(req.TypeName)
 
 	version := int(req.Version)
@@ -276,7 +249,7 @@ func (s *GRPCProviderServer) UpgradeResourceState(ctx context.Context, req *prot
 	// We first need to upgrade a flatmap state if it exists.
 	// There should never be both a JSON and Flatmap state in the request.
 	case len(req.RawState.Flatmap) > 0:
-		jsonMap, version, err = s.upgradeFlatmapState(ctx, version, req.RawState.Flatmap, res)
+		jsonMap, version, err = s.upgradeFlatmapState(version, req.RawState.Flatmap, res)
 		if err != nil {
 			resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, err)
 			return resp, nil
@@ -294,7 +267,7 @@ func (s *GRPCProviderServer) UpgradeResourceState(ctx context.Context, req *prot
 	}
 
 	// complete the upgrade of the JSON states
-	jsonMap, err = s.upgradeJSONState(ctx, version, jsonMap, res)
+	jsonMap, err = s.upgradeJSONState(version, jsonMap, res)
 	if err != nil {
 		resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, err)
 		return resp, nil
@@ -338,7 +311,7 @@ func (s *GRPCProviderServer) UpgradeResourceState(ctx context.Context, req *prot
 // map[string]interface{}.
 // upgradeFlatmapState returns the json map along with the corresponding schema
 // version.
-func (s *GRPCProviderServer) upgradeFlatmapState(ctx context.Context, version int, m map[string]string, res *schema.Resource) (map[string]interface{}, int, error) {
+func (s *GRPCProviderServer) upgradeFlatmapState(version int, m map[string]string, res *schema.Resource) (map[string]interface{}, int, error) {
 	// this will be the version we've upgraded so, defaulting to the given
 	// version in case no migration was called.
 	upgradedVersion := version
@@ -370,6 +343,7 @@ func (s *GRPCProviderServer) upgradeFlatmapState(ctx context.Context, version in
 				"schema_version": strconv.Itoa(version),
 			},
 		}
+
 		is, err := res.MigrateState(version, is, s.provider.Meta())
 		if err != nil {
 			return nil, 0, err
@@ -410,7 +384,7 @@ func (s *GRPCProviderServer) upgradeFlatmapState(ctx context.Context, version in
 	return jsonMap, upgradedVersion, err
 }
 
-func (s *GRPCProviderServer) upgradeJSONState(ctx context.Context, version int, m map[string]interface{}, res *schema.Resource) (map[string]interface{}, error) {
+func (s *GRPCProviderServer) upgradeJSONState(version int, m map[string]interface{}, res *schema.Resource) (map[string]interface{}, error) {
 	var err error
 
 	for _, upgrader := range res.StateUpgraders {
@@ -418,7 +392,7 @@ func (s *GRPCProviderServer) upgradeJSONState(ctx context.Context, version int, 
 			continue
 		}
 
-		m, err = upgrader.Upgrade(ctx, m, s.provider.Meta())
+		m, err = upgrader.Upgrade(m, s.provider.Meta())
 		if err != nil {
 			return nil, err
 		}
@@ -480,18 +454,17 @@ func (s *GRPCProviderServer) removeAttributes(v interface{}, ty cty.Type) {
 }
 
 func (s *GRPCProviderServer) Stop(_ context.Context, _ *proto.Stop_Request) (*proto.Stop_Response, error) {
-	s.stopMu.Lock()
-	defer s.stopMu.Unlock()
+	resp := &proto.Stop_Response{}
 
-	// stop
-	close(s.stopCh)
-	// reset the stop signal
-	s.stopCh = make(chan struct{})
+	err := s.provider.Stop()
+	if err != nil {
+		resp.Error = err.Error()
+	}
 
-	return &proto.Stop_Response{}, nil
+	return resp, nil
 }
 
-func (s *GRPCProviderServer) Configure(ctx context.Context, req *proto.Configure_Request) (*proto.Configure_Response, error) {
+func (s *GRPCProviderServer) Configure(_ context.Context, req *proto.Configure_Request) (*proto.Configure_Response, error) {
 	resp := &proto.Configure_Response{}
 
 	schemaBlock := s.getProviderSchemaBlock()
@@ -511,19 +484,13 @@ func (s *GRPCProviderServer) Configure(ctx context.Context, req *proto.Configure
 	}
 
 	config := terraform.NewResourceConfigShimmed(configVal, schemaBlock)
-	// TODO: remove global stop context hack
-	// This attaches a global stop synchro'd context onto the provider.Configure
-	// request scoped context. This provides a substitute for the removed provider.StopContext()
-	// function. Ideally a provider should migrate to the context aware API that receives
-	// request scoped contexts, however this is a large undertaking for very large providers.
-	ctxHack := context.WithValue(ctx, c.StopContextKey, s.StopContext(context.Background()))
-	diags := s.provider.Configure(ctxHack, config)
-	resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, diags)
+	err = s.provider.Configure(config)
+	resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, err)
 
 	return resp, nil
 }
 
-func (s *GRPCProviderServer) ReadResource(ctx context.Context, req *proto.ReadResource_Request) (*proto.ReadResource_Response, error) {
+func (s *GRPCProviderServer) ReadResource(_ context.Context, req *proto.ReadResource_Request) (*proto.ReadResource_Response, error) {
 	resp := &proto.ReadResource_Response{
 		// helper/schema did previously handle private data during refresh, but
 		// core is now going to expect this to be maintained in order to
@@ -531,11 +498,7 @@ func (s *GRPCProviderServer) ReadResource(ctx context.Context, req *proto.ReadRe
 		Private: req.Private,
 	}
 
-	res, ok := s.provider.ResourcesMap[req.TypeName]
-	if !ok {
-		resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, fmt.Errorf("unknown resource type: %s", req.TypeName))
-		return resp, nil
-	}
+	res := s.provider.ResourcesMap[req.TypeName]
 	schemaBlock := s.getResourceSchemaBlock(req.TypeName)
 
 	stateVal, err := msgpack.Unmarshal(req.CurrentState.Msgpack, schemaBlock.ImpliedType())
@@ -559,19 +522,9 @@ func (s *GRPCProviderServer) ReadResource(ctx context.Context, req *proto.ReadRe
 	}
 	instanceState.Meta = private
 
-	pmSchemaBlock := s.getProviderMetaSchemaBlock()
-	if pmSchemaBlock != nil && req.ProviderMeta != nil {
-		providerSchemaVal, err := msgpack.Unmarshal(req.ProviderMeta.Msgpack, pmSchemaBlock.ImpliedType())
-		if err != nil {
-			resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, err)
-			return resp, nil
-		}
-		instanceState.ProviderMeta = providerSchemaVal
-	}
-
-	newInstanceState, diags := res.RefreshWithoutUpgrade(ctx, instanceState, s.provider.Meta())
-	resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, diags)
-	if diags.HasError() {
+	newInstanceState, err := res.RefreshWithoutUpgrade(instanceState, s.provider.Meta())
+	if err != nil {
+		resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, err)
 		return resp, nil
 	}
 
@@ -614,7 +567,7 @@ func (s *GRPCProviderServer) ReadResource(ctx context.Context, req *proto.ReadRe
 	return resp, nil
 }
 
-func (s *GRPCProviderServer) PlanResourceChange(ctx context.Context, req *proto.PlanResourceChange_Request) (*proto.PlanResourceChange_Response, error) {
+func (s *GRPCProviderServer) PlanResourceChange(_ context.Context, req *proto.PlanResourceChange_Request) (*proto.PlanResourceChange_Response, error) {
 	resp := &proto.PlanResourceChange_Response{}
 
 	// This is a signal to Terraform Core that we're doing the best we can to
@@ -625,11 +578,7 @@ func (s *GRPCProviderServer) PlanResourceChange(ctx context.Context, req *proto.
 	// confusing downstream errors.
 	resp.LegacyTypeSystem = true
 
-	res, ok := s.provider.ResourcesMap[req.TypeName]
-	if !ok {
-		resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, fmt.Errorf("unknown resource type: %s", req.TypeName))
-		return resp, nil
-	}
+	res := s.provider.ResourcesMap[req.TypeName]
 	schemaBlock := s.getResourceSchemaBlock(req.TypeName)
 
 	priorStateVal, err := msgpack.Unmarshal(req.PriorState.Msgpack, schemaBlock.ImpliedType())
@@ -653,6 +602,10 @@ func (s *GRPCProviderServer) PlanResourceChange(ctx context.Context, req *proto.
 		return resp, nil
 	}
 
+	info := &terraform.InstanceInfo{
+		Type: req.TypeName,
+	}
+
 	priorState, err := res.ShimInstanceStateFromValue(priorStateVal)
 	if err != nil {
 		resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, err)
@@ -668,16 +621,6 @@ func (s *GRPCProviderServer) PlanResourceChange(ctx context.Context, req *proto.
 
 	priorState.Meta = priorPrivate
 
-	pmSchemaBlock := s.getProviderMetaSchemaBlock()
-	if pmSchemaBlock != nil && req.ProviderMeta != nil {
-		providerSchemaVal, err := msgpack.Unmarshal(req.ProviderMeta.Msgpack, pmSchemaBlock.ImpliedType())
-		if err != nil {
-			resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, err)
-			return resp, nil
-		}
-		priorState.ProviderMeta = providerSchemaVal
-	}
-
 	// Ensure there are no nulls that will cause helper/schema to panic.
 	if err := validateConfigNulls(proposedNewStateVal, nil); err != nil {
 		resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, err)
@@ -687,7 +630,7 @@ func (s *GRPCProviderServer) PlanResourceChange(ctx context.Context, req *proto.
 	// turn the proposed state into a legacy configuration
 	cfg := terraform.NewResourceConfigShimmed(proposedNewStateVal, schemaBlock)
 
-	diff, err := res.SimpleDiff(ctx, priorState, cfg, s.provider.Meta())
+	diff, err := s.provider.SimpleDiff(info, priorState, cfg)
 	if err != nil {
 		resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, err)
 		return resp, nil
@@ -841,17 +784,13 @@ func (s *GRPCProviderServer) PlanResourceChange(ctx context.Context, req *proto.
 	return resp, nil
 }
 
-func (s *GRPCProviderServer) ApplyResourceChange(ctx context.Context, req *proto.ApplyResourceChange_Request) (*proto.ApplyResourceChange_Response, error) {
+func (s *GRPCProviderServer) ApplyResourceChange(_ context.Context, req *proto.ApplyResourceChange_Request) (*proto.ApplyResourceChange_Response, error) {
 	resp := &proto.ApplyResourceChange_Response{
 		// Start with the existing state as a fallback
 		NewState: req.PriorState,
 	}
 
-	res, ok := s.provider.ResourcesMap[req.TypeName]
-	if !ok {
-		resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, fmt.Errorf("unknown resource type: %s", req.TypeName))
-		return resp, nil
-	}
+	res := s.provider.ResourcesMap[req.TypeName]
 	schemaBlock := s.getResourceSchemaBlock(req.TypeName)
 
 	priorStateVal, err := msgpack.Unmarshal(req.PriorState.Msgpack, schemaBlock.ImpliedType())
@@ -864,6 +803,10 @@ func (s *GRPCProviderServer) ApplyResourceChange(ctx context.Context, req *proto
 	if err != nil {
 		resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, err)
 		return resp, nil
+	}
+
+	info := &terraform.InstanceInfo{
+		Type: req.TypeName,
 	}
 
 	priorState, err := res.ShimInstanceStateFromValue(priorStateVal)
@@ -892,7 +835,7 @@ func (s *GRPCProviderServer) ApplyResourceChange(ctx context.Context, req *proto
 			Destroy:    true,
 		}
 	} else {
-		diff, err = schema.DiffFromValues(ctx, priorStateVal, plannedStateVal, stripResourceModifiers(res))
+		diff, err = schema.DiffFromValues(priorStateVal, plannedStateVal, stripResourceModifiers(res))
 		if err != nil {
 			resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, err)
 			return resp, nil
@@ -939,19 +882,11 @@ func (s *GRPCProviderServer) ApplyResourceChange(ctx context.Context, req *proto
 		}
 	}
 
-	pmSchemaBlock := s.getProviderMetaSchemaBlock()
-	if pmSchemaBlock != nil && req.ProviderMeta != nil {
-		providerSchemaVal, err := msgpack.Unmarshal(req.ProviderMeta.Msgpack, pmSchemaBlock.ImpliedType())
-		if err != nil {
-			resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, err)
-			return resp, nil
-		}
-		priorState.ProviderMeta = providerSchemaVal
+	newInstanceState, err := s.provider.Apply(info, priorState, diff)
+	// we record the error here, but continue processing any returned state.
+	if err != nil {
+		resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, err)
 	}
-
-	newInstanceState, diags := res.Apply(ctx, priorState, diff, s.provider.Meta())
-	resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, diags)
-
 	newStateVal := cty.NullVal(schemaBlock.ImpliedType())
 
 	// Always return a null value for destroy.
@@ -1008,14 +943,14 @@ func (s *GRPCProviderServer) ApplyResourceChange(ctx context.Context, req *proto
 	return resp, nil
 }
 
-func (s *GRPCProviderServer) ImportResourceState(ctx context.Context, req *proto.ImportResourceState_Request) (*proto.ImportResourceState_Response, error) {
+func (s *GRPCProviderServer) ImportResourceState(_ context.Context, req *proto.ImportResourceState_Request) (*proto.ImportResourceState_Response, error) {
 	resp := &proto.ImportResourceState_Response{}
 
 	info := &terraform.InstanceInfo{
 		Type: req.TypeName,
 	}
 
-	newInstanceStates, err := s.provider.ImportState(ctx, info, req.Id)
+	newInstanceStates, err := s.provider.ImportState(info, req.Id)
 	if err != nil {
 		resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, err)
 		return resp, nil
@@ -1066,7 +1001,7 @@ func (s *GRPCProviderServer) ImportResourceState(ctx context.Context, req *proto
 	return resp, nil
 }
 
-func (s *GRPCProviderServer) ReadDataSource(ctx context.Context, req *proto.ReadDataSource_Request) (*proto.ReadDataSource_Response, error) {
+func (s *GRPCProviderServer) ReadDataSource(_ context.Context, req *proto.ReadDataSource_Request) (*proto.ReadDataSource_Response, error) {
 	resp := &proto.ReadDataSource_Response{}
 
 	schemaBlock := s.getDatasourceSchemaBlock(req.TypeName)
@@ -1075,6 +1010,10 @@ func (s *GRPCProviderServer) ReadDataSource(ctx context.Context, req *proto.Read
 	if err != nil {
 		resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, err)
 		return resp, nil
+	}
+
+	info := &terraform.InstanceInfo{
+		Type: req.TypeName,
 	}
 
 	// Ensure there are no nulls that will cause helper/schema to panic.
@@ -1087,21 +1026,16 @@ func (s *GRPCProviderServer) ReadDataSource(ctx context.Context, req *proto.Read
 
 	// we need to still build the diff separately with the Read method to match
 	// the old behavior
-	res, ok := s.provider.DataSourcesMap[req.TypeName]
-	if !ok {
-		resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, fmt.Errorf("unknown data source: %s", req.TypeName))
-		return resp, nil
-	}
-	diff, err := res.Diff(ctx, nil, config, s.provider.Meta())
+	diff, err := s.provider.ReadDataDiff(info, config)
 	if err != nil {
 		resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, err)
 		return resp, nil
 	}
 
 	// now we can get the new complete data source
-	newInstanceState, diags := res.ReadDataApply(ctx, diff, s.provider.Meta())
-	resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, diags)
-	if diags.HasError() {
+	newInstanceState, err := s.provider.ReadDataApply(info, diff)
+	if err != nil {
+		resp.Diagnostics = convert.AppendProtoDiag(resp.Diagnostics, err)
 		return resp, nil
 	}
 

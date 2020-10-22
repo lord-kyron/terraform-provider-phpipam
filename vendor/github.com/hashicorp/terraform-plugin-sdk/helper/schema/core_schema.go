@@ -3,41 +3,8 @@ package schema
 import (
 	"fmt"
 
-	"github.com/hashicorp/go-cty/cty"
-
-	"github.com/hashicorp/terraform-plugin-sdk/v2/internal/configs/configschema"
-)
-
-// StringKind represents the format a string is in.
-type StringKind configschema.StringKind
-
-const (
-	// StringPlain indicates a string is plain-text and requires no processing for display.
-	StringPlain = StringKind(configschema.StringPlain)
-
-	// StringMarkdown indicates a string is in markdown format and may
-	// require additional processing to display.
-	StringMarkdown = StringKind(configschema.StringMarkdown)
-)
-
-var (
-	// DescriptionKind is the default StringKind of descriptions in this provider.
-	// It defaults to StringPlain but can be globally switched to StringMarkdown.
-	DescriptionKind = StringPlain
-
-	// SchemaDescriptionBuilder converts helper/schema.Schema Descriptions to configschema.Attribute
-	// and Block Descriptions. This method can be used to modify the description text prior to it
-	// being returned in the schema.
-	SchemaDescriptionBuilder = func(s *Schema) string {
-		return s.Description
-	}
-
-	// ResourceDescriptionBuilder converts helper/schema.Resource Descriptions to configschema.Block
-	// Descriptions at the resource top level. This method can be used to modify the description prior
-	// to it being returned in the schema.
-	ResourceDescriptionBuilder = func(r *Resource) string {
-		return r.Description
-	}
+	"github.com/hashicorp/terraform-plugin-sdk/internal/configs/configschema"
+	"github.com/zclconf/go-cty/cty"
 )
 
 // The functions and methods in this file are concerned with the conversion
@@ -148,22 +115,13 @@ func (s *Schema) coreConfigSchemaAttribute() *configschema.Attribute {
 		}
 	}
 
-	desc := SchemaDescriptionBuilder(s)
-	descKind := configschema.StringKind(DescriptionKind)
-	if desc == "" {
-		// fallback to plain text if empty
-		descKind = configschema.StringPlain
-	}
-
 	return &configschema.Attribute{
-		Type:            s.coreConfigSchemaType(),
-		Optional:        opt,
-		Required:        reqd,
-		Computed:        s.Computed,
-		Sensitive:       s.Sensitive,
-		Description:     desc,
-		DescriptionKind: descKind,
-		Deprecated:      s.Deprecated != "",
+		Type:        s.coreConfigSchemaType(),
+		Optional:    opt,
+		Required:    reqd,
+		Computed:    s.Computed,
+		Sensitive:   s.Sensitive,
+		Description: s.Description,
 	}
 }
 
@@ -174,17 +132,6 @@ func (s *Schema) coreConfigSchemaBlock() *configschema.NestedBlock {
 	ret := &configschema.NestedBlock{}
 	if nested := s.Elem.(*Resource).coreConfigSchema(); nested != nil {
 		ret.Block = *nested
-
-		desc := SchemaDescriptionBuilder(s)
-		descKind := configschema.StringKind(DescriptionKind)
-		if desc == "" {
-			// fallback to plain text if empty
-			descKind = configschema.StringPlain
-		}
-		// set these on the block from the attribute Schema
-		ret.Block.Description = desc
-		ret.Block.DescriptionKind = descKind
-		ret.Block.Deprecated = s.Deprecated != ""
 	}
 	switch s.Type {
 	case TypeList:
@@ -284,18 +231,6 @@ func (s *Schema) coreConfigSchemaType() cty.Type {
 func (r *Resource) CoreConfigSchema() *configschema.Block {
 	block := r.coreConfigSchema()
 
-	desc := ResourceDescriptionBuilder(r)
-	descKind := configschema.StringKind(DescriptionKind)
-	if desc == "" {
-		// fallback to plain text if empty
-		descKind = configschema.StringPlain
-	}
-
-	// Only apply Resource Description, Kind, Deprecation at top level
-	block.Description = desc
-	block.DescriptionKind = descKind
-	block.Deprecated = r.DeprecationMessage != ""
-
 	if block.Attributes == nil {
 		block.Attributes = map[string]*configschema.Attribute{}
 	}
@@ -364,5 +299,11 @@ func (r *Resource) CoreConfigSchema() *configschema.Block {
 }
 
 func (r *Resource) coreConfigSchema() *configschema.Block {
+	return schemaMap(r.Schema).CoreConfigSchema()
+}
+
+// CoreConfigSchema is a convenient shortcut for calling CoreConfigSchema
+// on the backends's schema.
+func (r *Backend) CoreConfigSchema() *configschema.Block {
 	return schemaMap(r.Schema).CoreConfigSchema()
 }

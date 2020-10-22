@@ -7,13 +7,65 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/hashicorp/go-cty/cty"
 	"github.com/mitchellh/copystructure"
 	"github.com/mitchellh/reflectwalk"
+	"github.com/zclconf/go-cty/cty"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/internal/configs/configschema"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/internal/configs/hcl2shim"
+	"github.com/hashicorp/terraform-plugin-sdk/internal/addrs"
+	"github.com/hashicorp/terraform-plugin-sdk/internal/configs/configschema"
+	"github.com/hashicorp/terraform-plugin-sdk/internal/configs/hcl2shim"
 )
+
+// Resource is a legacy way to identify a particular resource instance.
+//
+// New code should use addrs.ResourceInstance instead. This is still here
+// only for codepaths that haven't been updated yet.
+type Resource struct {
+	// These are all used by the new EvalNode stuff.
+	Name       string
+	Type       string
+	CountIndex int
+
+	// These aren't really used anymore anywhere, but we keep them around
+	// since we haven't done a proper cleanup yet.
+	Id           string
+	Info         *InstanceInfo
+	Config       *ResourceConfig
+	Dependencies []string
+	Diff         *InstanceDiff
+	Provider     ResourceProvider
+	State        *InstanceState
+	Flags        ResourceFlag
+}
+
+// NewResource constructs a legacy Resource object from an
+// addrs.ResourceInstance value.
+//
+// This is provided to shim to old codepaths that haven't been updated away
+// from this type yet. Since this old type is not able to represent instances
+// that have string keys, this function will panic if given a resource address
+// that has a string key.
+func NewResource(addr addrs.ResourceInstance) *Resource {
+	ret := &Resource{
+		Name: addr.Resource.Name,
+		Type: addr.Resource.Type,
+	}
+
+	if addr.Key != addrs.NoKey {
+		switch tk := addr.Key.(type) {
+		case addrs.IntKey:
+			ret.CountIndex = int(tk)
+		default:
+			panic(fmt.Errorf("resource instance with key %#v is not supported", addr.Key))
+		}
+	}
+
+	return ret
+}
+
+// ResourceKind specifies what kind of instance we're working with, whether
+// its a primary instance, a tainted instance, or an orphan.
+type ResourceFlag byte
 
 // InstanceInfo is used to hold information about the instance and/or
 // resource being modified.
@@ -28,6 +80,95 @@ type InstanceInfo struct {
 
 	// Type is the resource type of this instance
 	Type string
+}
+
+// NewInstanceInfo constructs an InstanceInfo from an addrs.AbsResourceInstance.
+//
+// InstanceInfo is a legacy type, and uses of it should be gradually replaced
+// by direct use of addrs.AbsResource or addrs.AbsResourceInstance as
+// appropriate.
+//
+// The legacy InstanceInfo type cannot represent module instances with instance
+// keys, so this function will panic if given such a path. Uses of this type
+// should all be removed or replaced before implementing "count" and "for_each"
+// arguments on modules in order to avoid such panics.
+//
+// This legacy type also cannot represent resource instances with string
+// instance keys. It will panic if the given key is not either NoKey or an
+// IntKey.
+func NewInstanceInfo(addr addrs.AbsResourceInstance) *InstanceInfo {
+	// We need an old-style []string module path for InstanceInfo.
+	path := make([]string, len(addr.Module))
+	for i, step := range addr.Module {
+		if step.InstanceKey != addrs.NoKey {
+			panic("NewInstanceInfo cannot convert module instance with key")
+		}
+		path[i] = step.Name
+	}
+
+	// This is a funny old meaning of "id" that is no longer current. It should
+	// not be used for anything users might see. Note that it does not include
+	// a representation of the resource mode, and so it's impossible to
+	// determine from an InstanceInfo alone whether it is a managed or data
+	// resource that is being referred to.
+	id := fmt.Sprintf("%s.%s", addr.Resource.Resource.Type, addr.Resource.Resource.Name)
+	if addr.Resource.Resource.Mode == addrs.DataResourceMode {
+		id = "data." + id
+	}
+	if addr.Resource.Key != addrs.NoKey {
+		switch k := addr.Resource.Key.(type) {
+		case addrs.IntKey:
+			id = id + fmt.Sprintf(".%d", int(k))
+		default:
+			panic(fmt.Sprintf("NewInstanceInfo cannot convert resource instance with %T instance key", addr.Resource.Key))
+		}
+	}
+
+	return &InstanceInfo{
+		Id:         id,
+		ModulePath: path,
+		Type:       addr.Resource.Resource.Type,
+	}
+}
+
+// ResourceAddress returns the address of the resource that the receiver is describing.
+func (i *InstanceInfo) ResourceAddress() *ResourceAddress {
+	// GROSS: for tainted and deposed instances, their status gets appended
+	// to i.Id to create a unique id for the graph node. Historically these
+	// ids were displayed to the user, so it's designed to be human-readable:
+	//   "aws_instance.bar.0 (deposed #0)"
+	//
+	// So here we detect such suffixes and try to interpret them back to
+	// their original meaning so we can then produce a ResourceAddress
+	// with a suitable InstanceType.
+	id := i.Id
+	instanceType := TypeInvalid
+	if idx := strings.Index(id, " ("); idx != -1 {
+		remain := id[idx:]
+		id = id[:idx]
+
+		switch {
+		case strings.Contains(remain, "tainted"):
+			instanceType = TypeTainted
+		case strings.Contains(remain, "deposed"):
+			instanceType = TypeDeposed
+		}
+	}
+
+	addr, err := parseResourceAddressInternal(id)
+	if err != nil {
+		// should never happen, since that would indicate a bug in the
+		// code that constructed this InstanceInfo.
+		panic(fmt.Errorf("InstanceInfo has invalid Id %s", id))
+	}
+	if len(i.ModulePath) > 1 {
+		addr.Path = i.ModulePath[1:] // trim off "root" prefix, which is implied
+	}
+	if instanceType != TypeInvalid {
+		addr.InstanceTypeSet = true
+		addr.InstanceType = instanceType
+	}
+	return addr
 }
 
 // ResourceConfig is a legacy type that was formerly used to represent
@@ -194,6 +335,22 @@ func (c *ResourceConfig) Equal(c2 *ResourceConfig) bool {
 	return true
 }
 
+// CheckSet checks that the given list of configuration keys is
+// properly set. If not, errors are returned for each unset key.
+//
+// This is useful to be called in the Validate method of a ResourceProvider.
+func (c *ResourceConfig) CheckSet(keys []string) []error {
+	var errs []error
+
+	for _, k := range keys {
+		if !c.IsSet(k) {
+			errs = append(errs, fmt.Errorf("%s must be set", k))
+		}
+	}
+
+	return errs
+}
+
 // Get looks up a configuration value by key and returns the value.
 //
 // The second return value is true if the get was successful. Get will
@@ -240,6 +397,28 @@ func (c *ResourceConfig) IsComputed(k string) bool {
 	}
 
 	return w.Unknown
+}
+
+// IsSet checks if the key in the configuration is set. A key is set if
+// it has a value or the value is being computed (is unknown currently).
+//
+// This function should be used rather than checking the keys of the
+// raw configuration itself, since a key may be omitted from the raw
+// configuration if it is being computed.
+func (c *ResourceConfig) IsSet(k string) bool {
+	if c == nil {
+		return false
+	}
+
+	if c.IsComputed(k) {
+		return true
+	}
+
+	if _, ok := c.Get(k); ok {
+		return true
+	}
+
+	return false
 }
 
 func (c *ResourceConfig) get(
@@ -322,8 +501,6 @@ type unknownCheckWalker struct {
 	Unknown bool
 }
 
-// TODO: investigate why deleting this causes odd runtime test failures
-// must be some kind of interface implementation
 func (w *unknownCheckWalker) Primitive(v reflect.Value) error {
 	if v.Interface() == hcl2shim.UnknownVariableValue {
 		w.Unknown = true

@@ -3,6 +3,7 @@ package schema
 import (
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 // FieldReaders are responsible for decoding fields out of data into
@@ -39,6 +40,13 @@ func (r *FieldReadResult) ValueOrZero(s *Schema) interface{} {
 	}
 
 	return s.ZeroValue()
+}
+
+// SchemasForFlatmapPath tries its best to find a sequence of schemas that
+// the given dot-delimited attribute path traverses through.
+func SchemasForFlatmapPath(path string, schemaMap map[string]*Schema) []*Schema {
+	parts := strings.Split(path, ".")
+	return addrToSchema(parts, schemaMap)
 }
 
 // addrToSchema finds the final element schema for the given address
@@ -197,7 +205,7 @@ func readListField(
 
 	// Go through each count, and get the item value out of it
 	result := make([]interface{}, countResult.Value.(int))
-	for i := range result {
+	for i, _ := range result {
 		is := strconv.FormatInt(int64(i), 10)
 		addrPadded[len(addrPadded)-1] = is
 		rawResult, err := r.ReadField(addrPadded)

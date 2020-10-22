@@ -3,17 +3,17 @@ package resource
 import (
 	"reflect"
 	"strings"
+	"testing"
 
 	"github.com/davecgh/go-spew/spew"
-	testing "github.com/mitchellh/go-testing-interface"
-
-	"github.com/hashicorp/terraform-plugin-sdk/v2/internal/plugintest"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
+	"github.com/hashicorp/terraform-plugin-sdk/acctest"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/internal/addrs"
+	"github.com/hashicorp/terraform-plugin-sdk/terraform"
+	tftest "github.com/hashicorp/terraform-plugin-test"
 )
 
-func testStepNewImportState(t testing.T, c TestCase, helper *plugintest.Helper, wd *plugintest.WorkingDir, step TestStep, cfg string) error {
-	t.Helper()
-
+func testStepNewImportState(t *testing.T, c TestCase, wd *tftest.WorkingDir, step TestStep, cfg string) error {
 	spewConf := spew.NewDefaultConfig()
 	spewConf.SortKeys = true
 
@@ -22,18 +22,7 @@ func testStepNewImportState(t testing.T, c TestCase, helper *plugintest.Helper, 
 	}
 
 	// get state from check sequence
-	var state *terraform.State
-	var err error
-	err = runProviderCommand(t, func() error {
-		state, err = getState(t, wd)
-		if err != nil {
-			return err
-		}
-		return nil
-	}, wd, c.ProviderFactories)
-	if err != nil {
-		t.Fatalf("Error getting state: %s", err)
-	}
+	state := getState(t, wd)
 
 	// Determine the ID to import
 	var importId string
@@ -62,38 +51,12 @@ func testStepNewImportState(t testing.T, c TestCase, helper *plugintest.Helper, 
 			t.Fatal("Cannot import state with no specified config")
 		}
 	}
-	importWd := helper.RequireNewWorkingDir(t)
+	importWd := acctest.TestHelper.RequireNewWorkingDir(t)
 	defer importWd.Close()
-	err = importWd.SetConfig(step.Config)
-	if err != nil {
-		t.Fatalf("Error setting test config: %s", err)
-	}
-
-	err = runProviderCommand(t, func() error {
-		return importWd.Init()
-	}, importWd, c.ProviderFactories)
-	if err != nil {
-		t.Fatalf("Error running init: %s", err)
-	}
-
-	err = runProviderCommand(t, func() error {
-		return importWd.Import(step.ResourceName, importId)
-	}, importWd, c.ProviderFactories)
-	if err != nil {
-		return err
-	}
-
-	var importState *terraform.State
-	err = runProviderCommand(t, func() error {
-		importState, err = getState(t, importWd)
-		if err != nil {
-			return err
-		}
-		return nil
-	}, importWd, c.ProviderFactories)
-	if err != nil {
-		t.Fatalf("Error getting state: %s", err)
-	}
+	importWd.RequireSetConfig(t, step.Config)
+	importWd.RequireInit(t)
+	importWd.RequireImport(t, step.ResourceName, importId)
+	importState := getState(t, wd)
 
 	// Go through the imported state and verify
 	if step.ImportStateCheck != nil {
@@ -118,16 +81,8 @@ func testStepNewImportState(t testing.T, c TestCase, helper *plugintest.Helper, 
 		for _, r := range new {
 			// Find the existing resource
 			var oldR *terraform.ResourceState
-			for r2Key, r2 := range old {
-				// Ensure that we do not match against data sources as they
-				// cannot be imported and are not what we want to verify.
-				// Mode is not present in ResourceState so we use the
-				// stringified ResourceStateKey for comparison.
-				if strings.HasPrefix(r2Key, "data.") {
-					continue
-				}
-
-				if r2.Primary != nil && r2.Primary.ID == r.Primary.ID && r2.Type == r.Type && r2.Provider == r.Provider {
+			for _, r2 := range old {
+				if r2.Primary != nil && r2.Primary.ID == r.Primary.ID && r2.Type == r.Type {
 					oldR = r2
 					break
 				}
@@ -136,6 +91,25 @@ func testStepNewImportState(t testing.T, c TestCase, helper *plugintest.Helper, 
 				t.Fatalf(
 					"Failed state verification, resource with ID %s not found",
 					r.Primary.ID)
+			}
+
+			// We'll try our best to find the schema for this resource type
+			// so we can ignore Removed fields during validation. If we fail
+			// to find the schema then we won't ignore them and so the test
+			// will need to rely on explicit ImportStateVerifyIgnore, though
+			// this shouldn't happen in any reasonable case.
+			// KEM CHANGE FROM OLD FRAMEWORK: Fail test if this happens.
+			var rsrcSchema *schema.Resource
+			providerAddr, diags := addrs.ParseAbsProviderConfigStr("provider." + r.Provider + "." + r.Type)
+			if diags.HasErrors() {
+				t.Fatalf("Failed to find schema for resource with ID %s", r.Primary)
+			}
+
+			providerType := providerAddr.ProviderConfig.Type
+			if provider, ok := step.providers[providerType]; ok {
+				if provider, ok := provider.(*schema.Provider); ok {
+					rsrcSchema = provider.ResourcesMap[r.Type]
+				}
 			}
 
 			// don't add empty flatmapped containers, so we can more easily
@@ -180,23 +154,24 @@ func testStepNewImportState(t testing.T, c TestCase, helper *plugintest.Helper, 
 				}
 			}
 
-			// timeouts are only _sometimes_ added to state. To
-			// account for this, just don't compare timeouts at
-			// all.
-			for k := range actual {
-				if strings.HasPrefix(k, "timeouts.") {
-					delete(actual, k)
+			// Also remove any attributes that are marked as "Removed" in the
+			// schema, if we have a schema to check that against.
+			if rsrcSchema != nil {
+				for k := range actual {
+					for _, schema := range rsrcSchema.SchemasForFlatmapPath(k) {
+						if schema.Removed != "" {
+							delete(actual, k)
+							break
+						}
+					}
 				}
-				if k == "timeouts" {
-					delete(actual, k)
-				}
-			}
-			for k := range expected {
-				if strings.HasPrefix(k, "timeouts.") {
-					delete(expected, k)
-				}
-				if k == "timeouts" {
-					delete(expected, k)
+				for k := range expected {
+					for _, schema := range rsrcSchema.SchemasForFlatmapPath(k) {
+						if schema.Removed != "" {
+							delete(expected, k)
+							break
+						}
+					}
 				}
 			}
 

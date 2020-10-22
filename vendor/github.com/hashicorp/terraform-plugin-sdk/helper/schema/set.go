@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/internal/helper/hashcode"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/hashcode"
 )
 
 // HashString hashes strings. If you want a Set of strings, this is the
@@ -150,46 +150,13 @@ func (s *Set) Union(other *Set) *Set {
 	return result
 }
 
-func checkSetMapEqual(m1, m2 map[string]interface{}) bool {
-	if (m1 == nil) != (m2 == nil) {
-		return false
-	}
-	if len(m1) != len(m2) {
-		return false
-	}
-	for k := range m1 {
-		v1 := m1[k]
-		v2, ok := m2[k]
-		if !ok {
-			return false
-		}
-		switch v1.(type) {
-		case map[string]interface{}:
-			same := checkSetMapEqual(v1.(map[string]interface{}), v2.(map[string]interface{}))
-			if !same {
-				return false
-			}
-		case *Set:
-			same := v1.(*Set).Equal(v2)
-			if !same {
-				return false
-			}
-		default:
-			same := reflect.DeepEqual(v1, v2)
-			if !same {
-				return false
-			}
-		}
-	}
-	return true
-}
-
 func (s *Set) Equal(raw interface{}) bool {
 	other, ok := raw.(*Set)
 	if !ok {
 		return false
 	}
-	return checkSetMapEqual(s.m, other.m)
+
+	return reflect.DeepEqual(s.m, other.m)
 }
 
 // HashEqual simply checks to the keys the top-level map to the keys in the
@@ -231,13 +198,16 @@ func (s *Set) add(item interface{}, computed bool) string {
 	code := s.hash(item)
 	if computed {
 		code = "~" + code
-		tmpCode := code
-		count := 0
-		for _, exists := s.m[tmpCode]; exists; _, exists = s.m[tmpCode] {
-			count++
-			tmpCode = fmt.Sprintf("%s%d", code, count)
+
+		if isProto5() {
+			tmpCode := code
+			count := 0
+			for _, exists := s.m[tmpCode]; exists; _, exists = s.m[tmpCode] {
+				count++
+				tmpCode = fmt.Sprintf("%s%d", code, count)
+			}
+			code = tmpCode
 		}
-		code = tmpCode
 	}
 
 	if _, ok := s.m[code]; !ok {
