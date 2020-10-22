@@ -28,7 +28,7 @@ var resourceSubnetOptionalFields = linearSearchSlice{
 	"allow_ip_requests",
 	"scan_agent_id",
 	"include_in_ping",
-	"host_discovery_enabled",
+	"host_discover_enabled",
 	"is_full",
 	"utilization_threshold",
 }
@@ -40,6 +40,9 @@ var resourceSubnetOptionalFields = linearSearchSlice{
 func bareSubnetSchema() map[string]*schema.Schema {
 	return map[string]*schema.Schema{
 		"subnet_id": &schema.Schema{
+			Type: schema.TypeInt,
+		},
+		"parent_subnet_id": &schema.Schema{
 			Type: schema.TypeInt,
 		},
 		"subnet_address": &schema.Schema{
@@ -108,21 +111,40 @@ func bareSubnetSchema() map[string]*schema.Schema {
 		"edit_date": &schema.Schema{
 			Type: schema.TypeString,
 		},
-		"gateway": &schema.Schema{
-			Type: schema.TypeMap,
-		},
-		"gateway_id": &schema.Schema{
-			Type: schema.TypeString,
-		},
+                "gateway": &schema.Schema{
+                        Type: schema.TypeMap,
+                },
+                "gateway_id": &schema.Schema{
+                        Type: schema.TypeString,
+                },
 		"custom_fields": &schema.Schema{
 			Type: schema.TypeMap,
 		},
-		"parent_subnet_id": &schema.Schema{
-			Type: schema.TypeInt,
-		},
 	}
 }
-
+// resourceSubnetSchema returns the schema for the phpipam_first_free_subnet resource. It
+// sets the required and optional fields, the latter defined in
+// resourceSubnetRequiredFields, and ensures that all optional and
+// non-configurable fields are computed as well.
+func resourceFirstFreeSubnetSchema() map[string]*schema.Schema {
+	schema := bareSubnetSchema()
+	for k, v := range schema {
+		switch {
+		// Subnet id and Mask are currently ForceNew
+	case k == "parent_subnet_id" || k == "subnet_mask" :
+			v.Required = true
+			v.ForceNew = true
+		case k == "custom_fields":
+			v.Optional = true
+		case resourceSubnetOptionalFields.Has(k):
+			v.Optional = true
+			v.Computed = true
+		default:
+			v.Computed = true
+		}
+	}
+	return schema
+}
 // resourceSubnetSchema returns the schema for the phpipam_subnet resource. It
 // sets the required and optional fields, the latter defined in
 // resourceSubnetRequiredFields, and ensures that all optional and
@@ -132,21 +154,13 @@ func resourceSubnetSchema() map[string]*schema.Schema {
 	for k, v := range schema {
 		switch {
 		// Subnet Address and Mask are currently ForceNew
-		case k == "subnet_address":
-			v.Optional = true
-			v.Computed = true
-			v.ForceNew = true
-			v.ConflictsWith = []string{"parent_subnet_id"}
-		case k == "subnet_mask":
+		case k == "subnet_address" || k == "subnet_mask":
 			v.Required = true
 			v.ForceNew = true
 		case k == "section_id":
 			v.Required = true
 		case k == "custom_fields":
 			v.Optional = true
-		case k == "parent_subnet_id":
-			v.Optional = true
-			v.ConflictsWith = []string{"subnet_id"}
 		case resourceSubnetOptionalFields.Has(k):
 			v.Optional = true
 			v.Computed = true
@@ -236,8 +250,8 @@ func expandSubnet(d *schema.ResourceData) subnets.Subnet {
 		IsFull:         phpipam.BoolIntString(d.Get("is_full").(bool)),
 		Threshold:      d.Get("utilization_threshold").(int),
 		Location:       d.Get("location_id").(int),
-		Gateway:        d.Get("gateway").(map[string]interface{}),
-		GatewayID:      d.Get("gateway_id").(string),
+		Gateway:	d.Get("gateway").(map[string]interface {}),
+		GatewayID:        d.Get("gateway_id").(string),
 	}
 
 	return s
