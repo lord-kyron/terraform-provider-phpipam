@@ -1,8 +1,6 @@
 package terraform
 
 import (
-	"bufio"
-	"bytes"
 	"fmt"
 	"log"
 	"reflect"
@@ -12,374 +10,26 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/hashicorp/terraform-plugin-sdk/internal/addrs"
-	"github.com/hashicorp/terraform-plugin-sdk/internal/configs/configschema"
-	"github.com/hashicorp/terraform-plugin-sdk/internal/configs/hcl2shim"
-	"github.com/zclconf/go-cty/cty"
+	"github.com/hashicorp/go-cty/cty"
 
-	"github.com/mitchellh/copystructure"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/internal/configs/configschema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/internal/configs/hcl2shim"
 )
 
-// DiffChangeType is an enum with the kind of changes a diff has planned.
-type DiffChangeType byte
+// diffChangeType is an enum with the kind of changes a diff has planned.
+type diffChangeType byte
 
 const (
-	DiffInvalid DiffChangeType = iota
-	DiffNone
-	DiffCreate
-	DiffUpdate
-	DiffDestroy
-	DiffDestroyCreate
-
-	// DiffRefresh is only used in the UI for displaying diffs.
-	// Managed resource reads never appear in plan, and when data source
-	// reads appear they are represented as DiffCreate in core before
-	// transforming to DiffRefresh in the UI layer.
-	DiffRefresh // TODO: Actually use DiffRefresh in core too, for less confusion
+	diffInvalid diffChangeType = iota
+	diffNone
+	diffCreate
+	diffUpdate
+	diffDestroy
+	diffDestroyCreate
 )
 
 // multiVal matches the index key to a flatmapped set, list or map
 var multiVal = regexp.MustCompile(`\.(#|%)$`)
-
-// Diff tracks the changes that are necessary to apply a configuration
-// to an existing infrastructure.
-type Diff struct {
-	// Modules contains all the modules that have a diff
-	Modules []*ModuleDiff
-}
-
-// Prune cleans out unused structures in the diff without affecting
-// the behavior of the diff at all.
-//
-// This is not safe to call concurrently. This is safe to call on a
-// nil Diff.
-func (d *Diff) Prune() {
-	if d == nil {
-		return
-	}
-
-	// Prune all empty modules
-	newModules := make([]*ModuleDiff, 0, len(d.Modules))
-	for _, m := range d.Modules {
-		// If the module isn't empty, we keep it
-		if !m.Empty() {
-			newModules = append(newModules, m)
-		}
-	}
-	if len(newModules) == 0 {
-		newModules = nil
-	}
-	d.Modules = newModules
-}
-
-// AddModule adds the module with the given path to the diff.
-//
-// This should be the preferred method to add module diffs since it
-// allows us to optimize lookups later as well as control sorting.
-func (d *Diff) AddModule(path addrs.ModuleInstance) *ModuleDiff {
-	// Lower the new-style address into a legacy-style address.
-	// This requires that none of the steps have instance keys, which is
-	// true for all addresses at the time of implementing this because
-	// "count" and "for_each" are not yet implemented for modules.
-	legacyPath := make([]string, len(path))
-	for i, step := range path {
-		if step.InstanceKey != addrs.NoKey {
-			// FIXME: Once the rest of Terraform is ready to use count and
-			// for_each, remove all of this and just write the addrs.ModuleInstance
-			// value itself into the ModuleState.
-			panic("diff cannot represent modules with count or for_each keys")
-		}
-
-		legacyPath[i] = step.Name
-	}
-
-	m := &ModuleDiff{Path: legacyPath}
-	m.init()
-	d.Modules = append(d.Modules, m)
-	return m
-}
-
-// ModuleByPath is used to lookup the module diff for the given path.
-// This should be the preferred lookup mechanism as it allows for future
-// lookup optimizations.
-func (d *Diff) ModuleByPath(path addrs.ModuleInstance) *ModuleDiff {
-	if d == nil {
-		return nil
-	}
-	for _, mod := range d.Modules {
-		if mod.Path == nil {
-			panic("missing module path")
-		}
-		modPath := normalizeModulePath(mod.Path)
-		if modPath.String() == path.String() {
-			return mod
-		}
-	}
-	return nil
-}
-
-// RootModule returns the ModuleState for the root module
-func (d *Diff) RootModule() *ModuleDiff {
-	root := d.ModuleByPath(addrs.RootModuleInstance)
-	if root == nil {
-		panic("missing root module")
-	}
-	return root
-}
-
-// Empty returns true if the diff has no changes.
-func (d *Diff) Empty() bool {
-	if d == nil {
-		return true
-	}
-
-	for _, m := range d.Modules {
-		if !m.Empty() {
-			return false
-		}
-	}
-
-	return true
-}
-
-// Equal compares two diffs for exact equality.
-//
-// This is different from the Same comparison that is supported which
-// checks for operation equality taking into account computed values. Equal
-// instead checks for exact equality.
-func (d *Diff) Equal(d2 *Diff) bool {
-	// If one is nil, they must both be nil
-	if d == nil || d2 == nil {
-		return d == d2
-	}
-
-	// Sort the modules
-	sort.Sort(moduleDiffSort(d.Modules))
-	sort.Sort(moduleDiffSort(d2.Modules))
-
-	// Copy since we have to modify the module destroy flag to false so
-	// we don't compare that. TODO: delete this when we get rid of the
-	// destroy flag on modules.
-	dCopy := d.DeepCopy()
-	d2Copy := d2.DeepCopy()
-	for _, m := range dCopy.Modules {
-		m.Destroy = false
-	}
-	for _, m := range d2Copy.Modules {
-		m.Destroy = false
-	}
-
-	// Use DeepEqual
-	return reflect.DeepEqual(dCopy, d2Copy)
-}
-
-// DeepCopy performs a deep copy of all parts of the Diff, making the
-// resulting Diff safe to use without modifying this one.
-func (d *Diff) DeepCopy() *Diff {
-	copy, err := copystructure.Config{Lock: true}.Copy(d)
-	if err != nil {
-		panic(err)
-	}
-
-	return copy.(*Diff)
-}
-
-func (d *Diff) String() string {
-	var buf bytes.Buffer
-
-	keys := make([]string, 0, len(d.Modules))
-	lookup := make(map[string]*ModuleDiff)
-	for _, m := range d.Modules {
-		addr := normalizeModulePath(m.Path)
-		key := addr.String()
-		keys = append(keys, key)
-		lookup[key] = m
-	}
-	sort.Strings(keys)
-
-	for _, key := range keys {
-		m := lookup[key]
-		mStr := m.String()
-
-		// If we're the root module, we just write the output directly.
-		if reflect.DeepEqual(m.Path, rootModulePath) {
-			buf.WriteString(mStr + "\n")
-			continue
-		}
-
-		buf.WriteString(fmt.Sprintf("%s:\n", key))
-
-		s := bufio.NewScanner(strings.NewReader(mStr))
-		for s.Scan() {
-			buf.WriteString(fmt.Sprintf("  %s\n", s.Text()))
-		}
-	}
-
-	return strings.TrimSpace(buf.String())
-}
-
-// ModuleDiff tracks the differences between resources to apply within
-// a single module.
-type ModuleDiff struct {
-	Path      []string
-	Resources map[string]*InstanceDiff
-	Destroy   bool // Set only by the destroy plan
-}
-
-func (d *ModuleDiff) init() {
-	if d.Resources == nil {
-		d.Resources = make(map[string]*InstanceDiff)
-	}
-	for _, r := range d.Resources {
-		r.init()
-	}
-}
-
-// ChangeType returns the type of changes that the diff for this
-// module includes.
-//
-// At a module level, this will only be DiffNone, DiffUpdate, DiffDestroy, or
-// DiffCreate. If an instance within the module has a DiffDestroyCreate
-// then this will register as a DiffCreate for a module.
-func (d *ModuleDiff) ChangeType() DiffChangeType {
-	result := DiffNone
-	for _, r := range d.Resources {
-		change := r.ChangeType()
-		switch change {
-		case DiffCreate, DiffDestroy:
-			if result == DiffNone {
-				result = change
-			}
-		case DiffDestroyCreate, DiffUpdate:
-			result = DiffUpdate
-		}
-	}
-
-	return result
-}
-
-// Empty returns true if the diff has no changes within this module.
-func (d *ModuleDiff) Empty() bool {
-	if d.Destroy {
-		return false
-	}
-
-	if len(d.Resources) == 0 {
-		return true
-	}
-
-	for _, rd := range d.Resources {
-		if !rd.Empty() {
-			return false
-		}
-	}
-
-	return true
-}
-
-// Instances returns the instance diffs for the id given. This can return
-// multiple instance diffs if there are counts within the resource.
-func (d *ModuleDiff) Instances(id string) []*InstanceDiff {
-	var result []*InstanceDiff
-	for k, diff := range d.Resources {
-		if k == id || strings.HasPrefix(k, id+".") {
-			if !diff.Empty() {
-				result = append(result, diff)
-			}
-		}
-	}
-
-	return result
-}
-
-// IsRoot says whether or not this module diff is for the root module.
-func (d *ModuleDiff) IsRoot() bool {
-	return reflect.DeepEqual(d.Path, rootModulePath)
-}
-
-// String outputs the diff in a long but command-line friendly output
-// format that users can read to quickly inspect a diff.
-func (d *ModuleDiff) String() string {
-	var buf bytes.Buffer
-
-	names := make([]string, 0, len(d.Resources))
-	for name, _ := range d.Resources {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	for _, name := range names {
-		rdiff := d.Resources[name]
-
-		crud := "UPDATE"
-		switch {
-		case rdiff.RequiresNew() && (rdiff.GetDestroy() || rdiff.GetDestroyTainted()):
-			crud = "DESTROY/CREATE"
-		case rdiff.GetDestroy() || rdiff.GetDestroyDeposed():
-			crud = "DESTROY"
-		case rdiff.RequiresNew():
-			crud = "CREATE"
-		}
-
-		extra := ""
-		if !rdiff.GetDestroy() && rdiff.GetDestroyDeposed() {
-			extra = " (deposed only)"
-		}
-
-		buf.WriteString(fmt.Sprintf(
-			"%s: %s%s\n",
-			crud,
-			name,
-			extra))
-
-		keyLen := 0
-		rdiffAttrs := rdiff.CopyAttributes()
-		keys := make([]string, 0, len(rdiffAttrs))
-		for key, _ := range rdiffAttrs {
-			if key == "id" {
-				continue
-			}
-
-			keys = append(keys, key)
-			if len(key) > keyLen {
-				keyLen = len(key)
-			}
-		}
-		sort.Strings(keys)
-
-		for _, attrK := range keys {
-			attrDiff, _ := rdiff.GetAttribute(attrK)
-
-			v := attrDiff.New
-			u := attrDiff.Old
-			if attrDiff.NewComputed {
-				v = "<computed>"
-			}
-
-			if attrDiff.Sensitive {
-				u = "<sensitive>"
-				v = "<sensitive>"
-			}
-
-			updateMsg := ""
-			if attrDiff.RequiresNew {
-				updateMsg = " (forces new resource)"
-			} else if attrDiff.Sensitive {
-				updateMsg = " (attribute changed)"
-			}
-
-			buf.WriteString(fmt.Sprintf(
-				"  %s:%s %#v => %#v%s\n",
-				attrK,
-				strings.Repeat(" ", keyLen-len(attrK)),
-				u,
-				v,
-				updateMsg))
-		}
-	}
-
-	return buf.String()
-}
 
 // InstanceDiff is the diff of a resource from some state to another.
 type InstanceDiff struct {
@@ -955,12 +605,7 @@ type ResourceAttrDiff struct {
 	NewExtra    interface{} // Extra information for the provider
 	RequiresNew bool        // True if change requires new resource
 	Sensitive   bool        // True if the data should not be displayed in UI output
-	Type        DiffAttrType
-}
-
-// Empty returns true if the diff for this attr is neutral
-func (d *ResourceAttrDiff) Empty() bool {
-	return d.Old == d.New && !d.NewComputed && !d.NewRemoved
+	Type        diffAttrType
 }
 
 func (d *ResourceAttrDiff) GoString() string {
@@ -972,57 +617,32 @@ func (d *ResourceAttrDiff) GoString() string {
 // output attribute (comes as a result of applying the configuration). An
 // example input would be "ami" for AWS and an example output would be
 // "private_ip".
-type DiffAttrType byte
-
-const (
-	DiffAttrUnknown DiffAttrType = iota
-	DiffAttrInput
-	DiffAttrOutput
-)
-
-func (d *InstanceDiff) init() {
-	if d.Attributes == nil {
-		d.Attributes = make(map[string]*ResourceAttrDiff)
-	}
-}
+type diffAttrType byte
 
 func NewInstanceDiff() *InstanceDiff {
 	return &InstanceDiff{Attributes: make(map[string]*ResourceAttrDiff)}
 }
 
-func (d *InstanceDiff) Copy() (*InstanceDiff, error) {
-	if d == nil {
-		return nil, nil
-	}
-
-	dCopy, err := copystructure.Config{Lock: true}.Copy(d)
-	if err != nil {
-		return nil, err
-	}
-
-	return dCopy.(*InstanceDiff), nil
-}
-
-// ChangeType returns the DiffChangeType represented by the diff
+// ChangeType returns the diffChangeType represented by the diff
 // for this single instance.
-func (d *InstanceDiff) ChangeType() DiffChangeType {
+func (d *InstanceDiff) ChangeType() diffChangeType {
 	if d.Empty() {
-		return DiffNone
+		return diffNone
 	}
 
 	if d.RequiresNew() && (d.GetDestroy() || d.GetDestroyTainted()) {
-		return DiffDestroyCreate
+		return diffDestroyCreate
 	}
 
 	if d.GetDestroy() || d.GetDestroyDeposed() {
-		return DiffDestroy
+		return diffDestroy
 	}
 
 	if d.RequiresNew() {
-		return DiffCreate
+		return diffCreate
 	}
 
-	return DiffUpdate
+	return diffUpdate
 }
 
 // Empty returns true if this diff encapsulates no changes.
@@ -1044,6 +664,7 @@ func (d *InstanceDiff) Empty() bool {
 // This is different from the Same comparison that is supported which
 // checks for operation equality taking into account computed values. Equal
 // instead checks for exact equality.
+// TODO: investigate why removing this unused method causes panic in tests
 func (d *InstanceDiff) Equal(d2 *InstanceDiff) bool {
 	// If one is nil, they must both be nil
 	if d == nil || d2 == nil {
@@ -1052,16 +673,6 @@ func (d *InstanceDiff) Equal(d2 *InstanceDiff) bool {
 
 	// Use DeepEqual
 	return reflect.DeepEqual(d, d2)
-}
-
-// DeepCopy performs a deep copy of all parts of the InstanceDiff
-func (d *InstanceDiff) DeepCopy() *InstanceDiff {
-	copy, err := copystructure.Config{Lock: true}.Copy(d)
-	if err != nil {
-		panic(err)
-	}
-
-	return copy.(*InstanceDiff)
 }
 
 func (d *InstanceDiff) GoString() string {
@@ -1111,35 +722,11 @@ func (d *InstanceDiff) GetDestroyDeposed() bool {
 	return d.DestroyDeposed
 }
 
-func (d *InstanceDiff) SetDestroyDeposed(b bool) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	d.DestroyDeposed = b
-}
-
-// These methods are properly locked, for use outside other InstanceDiff
-// methods but everywhere else within the terraform package.
-// TODO refactor the locking scheme
-func (d *InstanceDiff) SetTainted(b bool) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	d.DestroyTainted = b
-}
-
 func (d *InstanceDiff) GetDestroyTainted() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
 	return d.DestroyTainted
-}
-
-func (d *InstanceDiff) SetDestroy(b bool) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	d.Destroy = b
 }
 
 func (d *InstanceDiff) GetDestroy() bool {
@@ -1149,32 +736,12 @@ func (d *InstanceDiff) GetDestroy() bool {
 	return d.Destroy
 }
 
-func (d *InstanceDiff) SetAttribute(key string, attr *ResourceAttrDiff) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	d.Attributes[key] = attr
-}
-
-func (d *InstanceDiff) DelAttribute(key string) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	delete(d.Attributes, key)
-}
-
 func (d *InstanceDiff) GetAttribute(key string) (*ResourceAttrDiff, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
 	attr, ok := d.Attributes[key]
 	return attr, ok
-}
-func (d *InstanceDiff) GetAttributesLen() int {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	return len(d.Attributes)
 }
 
 // Safely copies the Attributes map
@@ -1242,7 +809,7 @@ func (d *InstanceDiff) Same(d2 *InstanceDiff) (bool, string) {
 			// Found it! Ignore all of these. The prefix here is stripping
 			// off the "%" so it is just "k."
 			prefix := k[:len(k)-1]
-			for k2, _ := range d.Attributes {
+			for k2 := range d.Attributes {
 				if strings.HasPrefix(k2, prefix) {
 					ignoreAttrs[k2] = struct{}{}
 				}
@@ -1282,17 +849,17 @@ func (d *InstanceDiff) Same(d2 *InstanceDiff) (bool, string) {
 	// same attributes. To start, build up the check map to be all the keys.
 	checkOld := make(map[string]struct{})
 	checkNew := make(map[string]struct{})
-	for k, _ := range d.Attributes {
+	for k := range d.Attributes {
 		checkOld[k] = struct{}{}
 	}
-	for k, _ := range d2.CopyAttributes() {
+	for k := range d2.CopyAttributes() {
 		checkNew[k] = struct{}{}
 	}
 
 	// Make an ordered list so we are sure the approximated hashes are left
 	// to process at the end of the loop
 	keys := make([]string, 0, len(d.Attributes))
-	for k, _ := range d.Attributes {
+	for k := range d.Attributes {
 		keys = append(keys, k)
 	}
 	sort.StringSlice(keys).Sort()
@@ -1350,7 +917,7 @@ func (d *InstanceDiff) Same(d2 *InstanceDiff) (bool, string) {
 					return false, fmt.Sprintf("regexp failed to compile; err: %#v", err)
 				}
 
-				for k2, _ := range checkNew {
+				for k2 := range checkNew {
 					if re.MatchString(k2) {
 						delete(checkNew, k2)
 					}
@@ -1387,12 +954,12 @@ func (d *InstanceDiff) Same(d2 *InstanceDiff) (bool, string) {
 			// This is a computed list, set, or map, so remove any keys with
 			// this prefix from the check list.
 			kprefix := k[:len(k)-matchLen]
-			for k2, _ := range checkOld {
+			for k2 := range checkOld {
 				if strings.HasPrefix(k2, kprefix) {
 					delete(checkOld, k2)
 				}
 			}
-			for k2, _ := range checkNew {
+			for k2 := range checkNew {
 				if strings.HasPrefix(k2, kprefix) {
 					delete(checkNew, k2)
 				}
@@ -1412,7 +979,7 @@ func (d *InstanceDiff) Same(d2 *InstanceDiff) (bool, string) {
 	// Check for leftover attributes
 	if len(checkNew) > 0 {
 		extras := make([]string, 0, len(checkNew))
-		for attr, _ := range checkNew {
+		for attr := range checkNew {
 			extras = append(extras, attr)
 		}
 		return false,
@@ -1420,22 +987,4 @@ func (d *InstanceDiff) Same(d2 *InstanceDiff) (bool, string) {
 	}
 
 	return true, ""
-}
-
-// moduleDiffSort implements sort.Interface to sort module diffs by path.
-type moduleDiffSort []*ModuleDiff
-
-func (s moduleDiffSort) Len() int      { return len(s) }
-func (s moduleDiffSort) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
-func (s moduleDiffSort) Less(i, j int) bool {
-	a := s[i]
-	b := s[j]
-
-	// If the lengths are different, then the shorter one always wins
-	if len(a.Path) != len(b.Path) {
-		return len(a.Path) < len(b.Path)
-	}
-
-	// Otherwise, compare lexically
-	return strings.Join(a.Path, ".") < strings.Join(b.Path, ".")
 }

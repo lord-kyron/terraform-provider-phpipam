@@ -7,32 +7,33 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hashicorp/terraform-plugin-sdk/terraform"
+	"github.com/hashicorp/go-cty/cty"
+	"github.com/hashicorp/go-cty/cty/gocty"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
 )
 
 // ResourceData is used to query and set the attributes of a resource.
 //
 // ResourceData is the primary argument received for CRUD operations on
 // a resource as well as configuration of a provider. It is a powerful
-// structure that can be used to not only query data, but check for changes,
-// define partial state updates, etc.
+// structure that can be used to not only query data, but also check for changes
 //
-// The most relevant methods to take a look at are Get, Set, and Partial.
+// The most relevant methods to take a look at are Get and Set.
 type ResourceData struct {
 	// Settable (internally)
-	schema   map[string]*Schema
-	config   *terraform.ResourceConfig
-	state    *terraform.InstanceState
-	diff     *terraform.InstanceDiff
-	meta     map[string]interface{}
-	timeouts *ResourceTimeout
+	schema       map[string]*Schema
+	config       *terraform.ResourceConfig
+	state        *terraform.InstanceState
+	diff         *terraform.InstanceDiff
+	meta         map[string]interface{}
+	timeouts     *ResourceTimeout
+	providerMeta cty.Value
 
 	// Don't set
 	multiReader *MultiLevelFieldReader
 	setWriter   *MapFieldWriter
 	newState    *terraform.InstanceState
 	partial     bool
-	partialMap  map[string]struct{}
 	once        sync.Once
 	isNew       bool
 
@@ -47,17 +48,6 @@ type getResult struct {
 	Computed       bool
 	Exists         bool
 	Schema         *Schema
-}
-
-// UnsafeSetFieldRaw allows setting arbitrary values in state to arbitrary
-// values, bypassing schema. This MUST NOT be used in normal circumstances -
-// it exists only to support the remote_state data source.
-//
-// Deprecated: Fully define schema attributes and use Set() instead.
-func (d *ResourceData) UnsafeSetFieldRaw(key string, value string) {
-	d.once.Do(d.init)
-
-	d.setWriter.unsafeWriteField(key, value)
 }
 
 // Get returns the data for the given key, or nil if the key doesn't exist
@@ -108,16 +98,11 @@ func (d *ResourceData) GetOk(key string) (interface{}, bool) {
 	return r.Value, exists
 }
 
-// GetOkExists returns the data for a given key and whether or not the key
-// has been set to a non-zero value. This is only useful for determining
-// if boolean attributes have been set, if they are Optional but do not
-// have a Default value.
+// GetOkExists can check if TypeBool attributes that are Optional with
+// no Default value have been set.
 //
-// This is nearly the same function as GetOk, yet it does not check
-// for the zero value of the attribute's type. This allows for attributes
-// without a default, to fully check for a literal assignment, regardless
-// of the zero-value for that type.
-// This should only be used if absolutely required/needed.
+// Deprecated: usage is discouraged due to undefined behaviors and may be
+// removed in a future version of the SDK
 func (d *ResourceData) GetOkExists(key string) (interface{}, bool) {
 	r := d.getRaw(key, getSourceSet)
 	exists := r.Exists && !r.Computed
@@ -157,23 +142,19 @@ func (d *ResourceData) HasChange(key string) bool {
 	return !reflect.DeepEqual(o, n)
 }
 
-// Partial turns partial state mode on/off.
+// Partial is a legacy function that was used for capturing state of specific
+// attributes if an update only partially worked. Enabling this flag without
+// setting any specific keys with the now removed SetPartial has a useful side
+// effect of preserving all of the resource's previous state. Although confusing,
+// it has been discovered that during an update when an error is returned, the
+// proposed config is set into state, even without any calls to d.Set.
 //
-// When partial state mode is enabled, then only key prefixes specified
-// by SetPartial will be in the final state. This allows providers to return
-// partial states for partially applied resources (when errors occur).
-//
-// Deprecated: Partial state has very limited benefit given Terraform refreshes
-// before operations by default.
+// In practice this default behavior goes mostly unnoticed since Terraform
+// refreshes between operations by default. The state situation discussed is
+// subject to further investigation and potential change. Until then, this
+// function has been preserved for the specific usecase.
 func (d *ResourceData) Partial(on bool) {
 	d.partial = on
-	if on {
-		if d.partialMap == nil {
-			d.partialMap = make(map[string]struct{})
-		}
-	} else {
-		d.partialMap = nil
-	}
 }
 
 // Set sets the value for the given key.
@@ -202,25 +183,14 @@ func (d *ResourceData) Set(key string, value interface{}) error {
 	}
 
 	err := d.setWriter.WriteField(strings.Split(key, "."), value)
-	if err != nil && d.panicOnError {
-		panic(err)
+	if err != nil {
+		if d.panicOnError {
+			panic(err)
+		} else {
+			log.Printf("[ERROR] setting state: %s", err)
+		}
 	}
 	return err
-}
-
-// SetPartial adds the key to the final state output while
-// in partial state mode. The key must be a root key in the schema (i.e.
-// it cannot be "list.0").
-//
-// If partial state mode is disabled, then this has no effect. Additionally,
-// whenever partial state mode is toggled, the partial data is cleared.
-//
-// Deprecated: Partial state has very limited benefit given Terraform refreshes
-// before operations by default.
-func (d *ResourceData) SetPartial(k string) {
-	if d.partial {
-		d.partialMap[k] = struct{}{}
-	}
 }
 
 func (d *ResourceData) MarkNewResource() {
@@ -320,7 +290,7 @@ func (d *ResourceData) State() *terraform.InstanceState {
 	// integrity check of fields existing in the schema, allowing dynamic
 	// keys to be created.
 	hasDynamicAttributes := false
-	for k, _ := range d.schema {
+	for k := range d.schema {
 		if k == "__has_dynamic_attributes" {
 			hasDynamicAttributes = true
 			log.Printf("[INFO] Resource %s has dynamic attributes", result.ID)
@@ -335,11 +305,7 @@ func (d *ResourceData) State() *terraform.InstanceState {
 		source := getSourceSet
 		if d.partial {
 			source = getSourceState
-			if _, ok := d.partialMap[k]; ok {
-				source = getSourceSet
-			}
 		}
-
 		raw := d.get([]string{k}, source)
 		if raw.Exists && !raw.Computed {
 			rawMap[k] = raw.Value
@@ -564,4 +530,11 @@ func (d *ResourceData) get(addr []string, source getSource) getResult {
 		Exists:         result.Exists,
 		Schema:         schema,
 	}
+}
+
+func (d *ResourceData) GetProviderMeta(dst interface{}) error {
+	if d.providerMeta.IsNull() {
+		return nil
+	}
+	return gocty.FromCtyValue(d.providerMeta, &dst)
 }

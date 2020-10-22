@@ -14,46 +14,22 @@ package schema
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 
-	"github.com/hashicorp/terraform-plugin-sdk/internal/configs/hcl2shim"
-	"github.com/hashicorp/terraform-plugin-sdk/terraform"
+	"github.com/hashicorp/go-cty/cty"
 	"github.com/mitchellh/copystructure"
 	"github.com/mitchellh/mapstructure"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/internal/configs/hcl2shim"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
 )
-
-// Name of ENV variable which (if not empty) prefers panic over error
-const PanicOnErr = "TF_SCHEMA_PANIC_ON_ERROR"
-
-// type used for schema package context keys
-type contextKey string
-
-var (
-	protoVersionMu sync.Mutex
-	protoVersion5  = false
-)
-
-func isProto5() bool {
-	protoVersionMu.Lock()
-	defer protoVersionMu.Unlock()
-	return protoVersion5
-
-}
-
-// SetProto5 enables a feature flag for any internal changes required required
-// to work with the new plugin protocol.  This should not be called by
-// provider.
-func SetProto5() {
-	protoVersionMu.Lock()
-	defer protoVersionMu.Unlock()
-	protoVersion5 = true
-}
 
 // Schema is used to describe the structure of a value.
 //
@@ -138,9 +114,9 @@ type Schema struct {
 	Default     interface{}
 	DefaultFunc SchemaDefaultFunc
 
-	// Description is used as the description for docs or asking for user
-	// input. It should be relatively short (a few sentences max) and should
-	// be formatted to fit a CLI.
+	// Description is used as the description for docs, the language server and
+	// other user facing usage. It can be plain-text or markdown depending on the
+	// global DescriptionKind setting.
 	Description string
 
 	// InputDefault is the default value to use for when inputs are requested.
@@ -191,14 +167,6 @@ type Schema struct {
 	MaxItems int
 	MinItems int
 
-	// PromoteSingle originally allowed for a single element to be assigned
-	// where a primitive list was expected, but this no longer works from
-	// Terraform v0.12 onwards (Terraform Core will require a list to be set
-	// regardless of what this is set to) and so only applies to Terraform v0.11
-	// and earlier, and so should be used only to retain this functionality
-	// for those still using v0.11 with a provider that formerly used this.
-	PromoteSingle bool
-
 	// The following fields are only valid for a TypeSet type.
 	//
 	// Set defines a function to determine the unique ID of an item so that
@@ -223,9 +191,12 @@ type Schema struct {
 	//
 	// AtLeastOneOf is a set of schema keys that, when set, at least one of
 	// the keys in that list must be specified.
+	//
+	// RequiredWith is a set of schema keys that must be set simultaneously.
 	ConflictsWith []string
 	ExactlyOneOf  []string
 	AtLeastOneOf  []string
+	RequiredWith  []string
 
 	// When Deprecated is set, this attribute is deprecated.
 	//
@@ -234,14 +205,6 @@ type Schema struct {
 	// how to address the deprecation.
 	Deprecated string
 
-	// When Removed is set, this attribute has been removed from the schema
-	//
-	// Removed attributes can be left in the Schema to generate informative error
-	// messages for the user when they show up in resource configurations.
-	// This string is the message shown to the user with instructions on
-	// what do to about the removed attribute.
-	Removed string
-
 	// ValidateFunc allows individual fields to define arbitrary validation
 	// logic. It is yielded the provided config value as an interface{} that is
 	// guaranteed to be of the proper Schema type, and it can yield warnings or
@@ -249,7 +212,32 @@ type Schema struct {
 	//
 	// ValidateFunc is honored only when the schema's Type is set to TypeInt,
 	// TypeFloat, TypeString, TypeBool, or TypeMap. It is ignored for all other types.
+	//
+	// Deprecated: please use ValidateDiagFunc
 	ValidateFunc SchemaValidateFunc
+
+	// ValidateDiagFunc allows individual fields to define arbitrary validation
+	// logic. It is yielded the provided config value as an interface{} that is
+	// guaranteed to be of the proper Schema type, and it can yield diagnostics
+	// based on inspection of that value.
+	//
+	// ValidateDiagFunc is honored only when the schema's Type is set to TypeInt,
+	// TypeFloat, TypeString, TypeBool, or TypeMap. It is ignored for all other types.
+	//
+	// ValidateDiagFunc is also yielded the cty.Path the SDK has built up to this
+	// attribute. The SDK will automatically set the AttributePath of any returned
+	// Diagnostics to this path. Therefore the developer does not need to set
+	// the AttributePath for primitive types.
+	//
+	// In the case of TypeMap to provide the most precise information, please
+	// set an AttributePath with the additional cty.IndexStep:
+	//
+	//  AttributePath: cty.IndexStringPath("key_name")
+	//
+	// Or alternatively use the passed in path to create the absolute path:
+	//
+	//  AttributePath: append(path, cty.IndexStep{Key: cty.StringVal("key_name")})
+	ValidateDiagFunc SchemaValidateDiagFunc
 
 	// Sensitive ensures that the attribute's value does not get displayed in
 	// logs or regular output. It should be used for passwords or other
@@ -318,7 +306,13 @@ type SchemaStateFunc func(interface{}) string
 
 // SchemaValidateFunc is a function used to validate a single field in the
 // schema.
+//
+// Deprecated: please use SchemaValidateDiagFunc
 type SchemaValidateFunc func(interface{}, string) ([]string, []error)
+
+// SchemaValidateDiagFunc is a function used to validate a single field in the
+// schema and has Diagnostic support.
+type SchemaValidateDiagFunc func(interface{}, cty.Path) diag.Diagnostics
 
 func (s *Schema) GoString() string {
 	return fmt.Sprintf("*%#v", *s)
@@ -434,6 +428,37 @@ func (s *Schema) finalizeDiff(d *terraform.ResourceAttrDiff, customized bool) *t
 	return d
 }
 
+func (s *Schema) validateFunc(decoded interface{}, k string, path cty.Path) diag.Diagnostics {
+	var diags diag.Diagnostics
+
+	if s.ValidateDiagFunc != nil {
+		diags = s.ValidateDiagFunc(decoded, path)
+		for i := range diags {
+			if !diags[i].AttributePath.HasPrefix(path) {
+				diags[i].AttributePath = append(path, diags[i].AttributePath...)
+			}
+		}
+	} else if s.ValidateFunc != nil {
+		ws, es := s.ValidateFunc(decoded, k)
+		for _, w := range ws {
+			diags = append(diags, diag.Diagnostic{
+				Severity:      diag.Warning,
+				Summary:       w,
+				AttributePath: path,
+			})
+		}
+		for _, e := range es {
+			diags = append(diags, diag.Diagnostic{
+				Severity:      diag.Error,
+				Summary:       e.Error(),
+				AttributePath: path,
+			})
+		}
+	}
+
+	return diags
+}
+
 // InternalMap is used to aid in the transition to the new schema types and
 // protocol. The name is not meant to convey any usefulness, as this is not to
 // be used directly by any providers.
@@ -443,10 +468,7 @@ type InternalMap = schemaMap
 type schemaMap map[string]*Schema
 
 func (m schemaMap) panicOnError() bool {
-	if os.Getenv(PanicOnErr) != "" {
-		return true
-	}
-	return false
+	return os.Getenv("TF_ACC") != ""
 }
 
 // Data returns a ResourceData for the given schema, state, and diff.
@@ -476,6 +498,7 @@ func (m *schemaMap) DeepCopy() schemaMap {
 // Diff returns the diff for a resource given the schema map,
 // state, and configuration.
 func (m schemaMap) Diff(
+	ctx context.Context,
 	s *terraform.InstanceState,
 	c *terraform.ResourceConfig,
 	customizeDiff CustomizeDiffFunc,
@@ -515,7 +538,7 @@ func (m schemaMap) Diff(
 	if !result.DestroyTainted && customizeDiff != nil {
 		mc := m.DeepCopy()
 		rd := newResourceDiff(mc, c, s, result)
-		if err := customizeDiff(rd, meta); err != nil {
+		if err := customizeDiff(ctx, rd, meta); err != nil {
 			return nil, err
 		}
 		for _, k := range rd.UpdatedKeys() {
@@ -556,7 +579,7 @@ func (m schemaMap) Diff(
 			if !result2.DestroyTainted && customizeDiff != nil {
 				mc := m.DeepCopy()
 				rd := newResourceDiff(mc, c, d.state, result2)
-				if err := customizeDiff(rd, meta); err != nil {
+				if err := customizeDiff(ctx, rd, meta); err != nil {
 					return nil, err
 				}
 				for _, k := range rd.UpdatedKeys() {
@@ -619,71 +642,9 @@ func (m schemaMap) Diff(
 	return result, nil
 }
 
-// Input implements the terraform.ResourceProvider method by asking
-// for input for required configuration keys that don't have a value.
-func (m schemaMap) Input(
-	input terraform.UIInput,
-	c *terraform.ResourceConfig) (*terraform.ResourceConfig, error) {
-	keys := make([]string, 0, len(m))
-	for k, _ := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	for _, k := range keys {
-		v := m[k]
-
-		// Skip things that don't require config, if that is even valid
-		// for a provider schema.
-		// Required XOR Optional must always be true to validate, so we only
-		// need to check one.
-		if v.Optional {
-			continue
-		}
-
-		// Deprecated fields should never prompt
-		if v.Deprecated != "" {
-			continue
-		}
-
-		// Skip things that have a value of some sort already
-		if _, ok := c.Raw[k]; ok {
-			continue
-		}
-
-		// Skip if it has a default value
-		defaultValue, err := v.DefaultValue()
-		if err != nil {
-			return nil, fmt.Errorf("%s: error loading default: %s", k, err)
-		}
-		if defaultValue != nil {
-			continue
-		}
-
-		var value interface{}
-		switch v.Type {
-		case TypeBool, TypeInt, TypeFloat, TypeSet, TypeList:
-			continue
-		case TypeString:
-			value, err = m.inputString(input, k, v)
-		default:
-			panic(fmt.Sprintf("Unknown type for input: %#v", v.Type))
-		}
-
-		if err != nil {
-			return nil, fmt.Errorf(
-				"%s: %s", k, err)
-		}
-
-		c.Config[k] = value
-	}
-
-	return c, nil
-}
-
 // Validate validates the configuration against this schema mapping.
-func (m schemaMap) Validate(c *terraform.ResourceConfig) ([]string, []error) {
-	return m.validateObject("", m, c)
+func (m schemaMap) Validate(c *terraform.ResourceConfig) diag.Diagnostics {
+	return m.validateObject("", m, c, cty.Path{})
 }
 
 // InternalValidate validates the format of this schema. This should be called
@@ -767,21 +728,28 @@ func (m schemaMap) internalValidate(topSchemaMap schemaMap, attrsOnly bool) erro
 		}
 
 		if len(v.ConflictsWith) > 0 {
-			err := checkKeysAgainstSchemaFlags(k, v.ConflictsWith, topSchemaMap)
+			err := checkKeysAgainstSchemaFlags(k, v.ConflictsWith, topSchemaMap, v, false)
 			if err != nil {
 				return fmt.Errorf("ConflictsWith: %+v", err)
 			}
 		}
 
+		if len(v.RequiredWith) > 0 {
+			err := checkKeysAgainstSchemaFlags(k, v.RequiredWith, topSchemaMap, v, true)
+			if err != nil {
+				return fmt.Errorf("RequiredWith: %+v", err)
+			}
+		}
+
 		if len(v.ExactlyOneOf) > 0 {
-			err := checkKeysAgainstSchemaFlags(k, v.ExactlyOneOf, topSchemaMap)
+			err := checkKeysAgainstSchemaFlags(k, v.ExactlyOneOf, topSchemaMap, v, true)
 			if err != nil {
 				return fmt.Errorf("ExactlyOneOf: %+v", err)
 			}
 		}
 
 		if len(v.AtLeastOneOf) > 0 {
-			err := checkKeysAgainstSchemaFlags(k, v.AtLeastOneOf, topSchemaMap)
+			err := checkKeysAgainstSchemaFlags(k, v.AtLeastOneOf, topSchemaMap, v, true)
 			if err != nil {
 				return fmt.Errorf("AtLeastOneOf: %+v", err)
 			}
@@ -820,27 +788,78 @@ func (m schemaMap) internalValidate(topSchemaMap schemaMap, attrsOnly bool) erro
 			}
 		}
 
-		// Computed-only field
-		if v.Computed && !v.Optional {
-			if v.ValidateFunc != nil {
-				return fmt.Errorf("%s: ValidateFunc is for validating user input, "+
-					"there's nothing to validate on computed-only field", k)
+		if v.Type == TypeMap && v.Elem != nil {
+			switch v.Elem.(type) {
+			case *Resource:
+				return fmt.Errorf("%s: TypeMap with Elem *Resource not supported,"+
+					"use TypeList/TypeSet with Elem *Resource or TypeMap with Elem *Schema", k)
+			}
+		}
+
+		if computedOnly {
+			if len(v.AtLeastOneOf) > 0 {
+				return fmt.Errorf("%s: AtLeastOneOf is for configurable attributes,"+
+					"there's nothing to configure on computed-only field", k)
+			}
+			if len(v.ConflictsWith) > 0 {
+				return fmt.Errorf("%s: ConflictsWith is for configurable attributes,"+
+					"there's nothing to configure on computed-only field", k)
+			}
+			if v.Default != nil {
+				return fmt.Errorf("%s: Default is for configurable attributes,"+
+					"there's nothing to configure on computed-only field", k)
+			}
+			if v.DefaultFunc != nil {
+				return fmt.Errorf("%s: DefaultFunc is for configurable attributes,"+
+					"there's nothing to configure on computed-only field", k)
 			}
 			if v.DiffSuppressFunc != nil {
 				return fmt.Errorf("%s: DiffSuppressFunc is for suppressing differences"+
 					" between config and state representation. "+
 					"There is no config for computed-only field, nothing to compare.", k)
 			}
-		}
-
-		if v.ValidateFunc != nil {
-			switch v.Type {
-			case TypeList, TypeSet:
-				return fmt.Errorf("%s: ValidateFunc is not yet supported on lists or sets.", k)
+			if len(v.ExactlyOneOf) > 0 {
+				return fmt.Errorf("%s: ExactlyOneOf is for configurable attributes,"+
+					"there's nothing to configure on computed-only field", k)
+			}
+			if v.InputDefault != "" {
+				return fmt.Errorf("%s: InputDefault is for configurable attributes,"+
+					"there's nothing to configure on computed-only field", k)
+			}
+			if v.MaxItems > 0 {
+				return fmt.Errorf("%s: MaxItems is for configurable attributes,"+
+					"there's nothing to configure on computed-only field", k)
+			}
+			if v.MinItems > 0 {
+				return fmt.Errorf("%s: MinItems is for configurable attributes,"+
+					"there's nothing to configure on computed-only field", k)
+			}
+			if v.StateFunc != nil {
+				return fmt.Errorf("%s: StateFunc is extraneous, "+
+					"value should just be changed before setting on computed-only field", k)
+			}
+			if v.ValidateFunc != nil {
+				return fmt.Errorf("%s: ValidateFunc is for validating user input, "+
+					"there's nothing to validate on computed-only field", k)
+			}
+			if v.ValidateDiagFunc != nil {
+				return fmt.Errorf("%s: ValidateDiagFunc is for validating user input, "+
+					"there's nothing to validate on computed-only field", k)
 			}
 		}
 
-		if v.Deprecated == "" && v.Removed == "" {
+		if v.ValidateFunc != nil || v.ValidateDiagFunc != nil {
+			switch v.Type {
+			case TypeList, TypeSet:
+				return fmt.Errorf("%s: ValidateFunc and ValidateDiagFunc are not yet supported on lists or sets.", k)
+			}
+		}
+
+		if v.ValidateFunc != nil && v.ValidateDiagFunc != nil {
+			return fmt.Errorf("%s: ValidateFunc and ValidateDiagFunc cannot both be set", k)
+		}
+
+		if v.Deprecated == "" {
 			if !isValidFieldName(k) {
 				return fmt.Errorf("%s: Field name may only contain lowercase alphanumeric characters & underscores.", k)
 			}
@@ -850,14 +869,20 @@ func (m schemaMap) internalValidate(topSchemaMap schemaMap, attrsOnly bool) erro
 	return nil
 }
 
-func checkKeysAgainstSchemaFlags(k string, keys []string, topSchemaMap schemaMap) error {
+func checkKeysAgainstSchemaFlags(k string, keys []string, topSchemaMap schemaMap, self *Schema, allowSelfReference bool) error {
 	for _, key := range keys {
 		parts := strings.Split(key, ".")
 		sm := topSchemaMap
 		var target *Schema
-		for _, part := range parts {
-			// Skip index fields
-			if _, err := strconv.Atoi(part); err == nil {
+		for idx, part := range parts {
+			// Skip index fields if 0
+			partInt, err := strconv.Atoi(part)
+
+			if err == nil {
+				if partInt != 0 {
+					return fmt.Errorf("%s configuration block reference (%s) can only use the .0. index for TypeList and MaxItems: 1 configuration blocks", k, key)
+				}
+
 				continue
 			}
 
@@ -866,13 +891,28 @@ func checkKeysAgainstSchemaFlags(k string, keys []string, topSchemaMap schemaMap
 				return fmt.Errorf("%s references unknown attribute (%s) at part (%s)", k, key, part)
 			}
 
-			if subResource, ok := target.Elem.(*Resource); ok {
-				sm = schemaMap(subResource.Schema)
+			subResource, ok := target.Elem.(*Resource)
+
+			if !ok {
+				continue
 			}
+
+			// Skip Type/MaxItems check if not the last element
+			if (target.Type == TypeSet || target.MaxItems != 1) && idx+1 != len(parts) {
+				return fmt.Errorf("%s configuration block reference (%s) can only be used with TypeList and MaxItems: 1 configuration blocks", k, key)
+			}
+
+			sm = schemaMap(subResource.Schema)
 		}
+
 		if target == nil {
 			return fmt.Errorf("%s cannot find target attribute (%s), sm: %#v", k, key, sm)
 		}
+
+		if target == self && !allowSelfReference {
+			return fmt.Errorf("%s cannot reference self (%s)", k, key)
+		}
+
 		if target.Required {
 			return fmt.Errorf("%s cannot contain Required attribute (%s)", k, key)
 		}
@@ -881,6 +921,7 @@ func checkKeysAgainstSchemaFlags(k string, keys []string, topSchemaMap schemaMap
 			return fmt.Errorf("%s cannot contain Computed(When) attribute (%s)", k, key)
 		}
 	}
+
 	return nil
 }
 
@@ -1358,32 +1399,26 @@ func (m schemaMap) diffString(
 	return nil
 }
 
-func (m schemaMap) inputString(
-	input terraform.UIInput,
-	k string,
-	schema *Schema) (interface{}, error) {
-	result, err := input.Input(context.Background(), &terraform.InputOpts{
-		Id:          k,
-		Query:       k,
-		Description: schema.Description,
-		Default:     schema.InputDefault,
-	})
-
-	return result, err
-}
-
 func (m schemaMap) validate(
 	k string,
 	schema *Schema,
-	c *terraform.ResourceConfig) ([]string, []error) {
+	c *terraform.ResourceConfig,
+	path cty.Path) diag.Diagnostics {
+
+	var diags diag.Diagnostics
+
 	raw, ok := c.Get(k)
 	if !ok && schema.DefaultFunc != nil {
 		// We have a dynamic default. Check if we have a value.
 		var err error
 		raw, err = schema.DefaultFunc()
 		if err != nil {
-			return nil, []error{fmt.Errorf(
-				"%q, error loading default: %s", k, err)}
+			return append(diags, diag.Diagnostic{
+				Severity:      diag.Error,
+				Summary:       "Loading Default",
+				Detail:        err.Error(),
+				AttributePath: path,
+			})
 		}
 
 		// We're okay as long as we had a value set
@@ -1392,26 +1427,52 @@ func (m schemaMap) validate(
 
 	err := validateExactlyOneAttribute(k, schema, c)
 	if err != nil {
-		return nil, []error{err}
+		return append(diags, diag.Diagnostic{
+			Severity:      diag.Error,
+			Summary:       "ExactlyOne",
+			Detail:        err.Error(),
+			AttributePath: path,
+		})
 	}
 
 	err = validateAtLeastOneAttribute(k, schema, c)
 	if err != nil {
-		return nil, []error{err}
+		return append(diags, diag.Diagnostic{
+			Severity:      diag.Error,
+			Summary:       "AtLeastOne",
+			Detail:        err.Error(),
+			AttributePath: path,
+		})
 	}
 
 	if !ok {
 		if schema.Required {
-			return nil, []error{fmt.Errorf(
-				"%q: required field is not set", k)}
+			return append(diags, diag.Diagnostic{
+				Severity:      diag.Error,
+				Summary:       "Required attribute is not set",
+				AttributePath: path,
+			})
 		}
-		return nil, nil
+		return diags
 	}
 
 	if !schema.Required && !schema.Optional {
 		// This is a computed-only field
-		return nil, []error{fmt.Errorf(
-			"%q: this field cannot be set", k)}
+		return append(diags, diag.Diagnostic{
+			Severity:      diag.Error,
+			Summary:       "Computed attribute cannot be set",
+			AttributePath: path,
+		})
+	}
+
+	err = validateRequiredWithAttribute(k, schema, c)
+	if err != nil {
+		return append(diags, diag.Diagnostic{
+			Severity:      diag.Error,
+			Summary:       "RequiredWith",
+			Detail:        err.Error(),
+			AttributePath: path,
+		})
 	}
 
 	// If the value is unknown then we can't validate it yet.
@@ -1421,17 +1482,27 @@ func (m schemaMap) validate(
 	// Required fields set via an interpolated value are accepted.
 	if !isWhollyKnown(raw) {
 		if schema.Deprecated != "" {
-			return []string{fmt.Sprintf("%q: [DEPRECATED] %s", k, schema.Deprecated)}, nil
+			return append(diags, diag.Diagnostic{
+				Severity:      diag.Warning,
+				Summary:       "Attribute is deprecated",
+				Detail:        schema.Deprecated,
+				AttributePath: path,
+			})
 		}
-		return nil, nil
+		return diags
 	}
 
 	err = validateConflictingAttributes(k, schema, c)
 	if err != nil {
-		return nil, []error{err}
+		return append(diags, diag.Diagnostic{
+			Severity:      diag.Error,
+			Summary:       "ConflictsWith",
+			Detail:        err.Error(),
+			AttributePath: path,
+		})
 	}
 
-	return m.validateType(k, raw, schema, c)
+	return m.validateType(k, raw, schema, c, path)
 }
 
 // isWhollyKnown returns false if the argument contains an UnknownVariableValue
@@ -1492,6 +1563,27 @@ func removeDuplicates(elements []string) []string {
 	}
 
 	return result
+}
+
+func validateRequiredWithAttribute(
+	k string,
+	schema *Schema,
+	c *terraform.ResourceConfig) error {
+
+	if len(schema.RequiredWith) == 0 {
+		return nil
+	}
+
+	allKeys := removeDuplicates(append(schema.RequiredWith, k))
+	sort.Strings(allKeys)
+
+	for _, key := range allKeys {
+		if _, ok := c.Get(key); !ok {
+			return fmt.Errorf("%q: all of `%s` must be specified", k, strings.Join(allKeys, ","))
+		}
+	}
+
+	return nil
 }
 
 func validateExactlyOneAttribute(
@@ -1557,33 +1649,33 @@ func (m schemaMap) validateList(
 	k string,
 	raw interface{},
 	schema *Schema,
-	c *terraform.ResourceConfig) ([]string, []error) {
+	c *terraform.ResourceConfig,
+	path cty.Path) diag.Diagnostics {
+
+	var diags diag.Diagnostics
+
 	// first check if the list is wholly unknown
 	if s, ok := raw.(string); ok {
 		if s == hcl2shim.UnknownVariableValue {
-			return nil, nil
+			return diags
 		}
 	}
 
 	// schemaMap can't validate nil
 	if raw == nil {
-		return nil, nil
+		return diags
 	}
 
 	// We use reflection to verify the slice because you can't
 	// case to []interface{} unless the slice is exactly that type.
 	rawV := reflect.ValueOf(raw)
 
-	// If we support promotion and the raw value isn't a slice, wrap
-	// it in []interface{} and check again.
-	if schema.PromoteSingle && rawV.Kind() != reflect.Slice {
-		raw = []interface{}{raw}
-		rawV = reflect.ValueOf(raw)
-	}
-
 	if rawV.Kind() != reflect.Slice {
-		return nil, []error{fmt.Errorf(
-			"%s: should be a list", k)}
+		return append(diags, diag.Diagnostic{
+			Severity:      diag.Error,
+			Summary:       "Attribute should be a list",
+			AttributePath: path,
+		})
 	}
 
 	// We can't validate list length if this came from a dynamic block.
@@ -1591,29 +1683,35 @@ func (m schemaMap) validateList(
 	// at this point, we're going to skip validation in the new protocol if
 	// there are any unknowns. Validate will eventually be called again once
 	// all values are known.
-	if isProto5() && !isWhollyKnown(raw) {
-		return nil, nil
+	if !isWhollyKnown(raw) {
+		return diags
 	}
 
 	// Validate length
 	if schema.MaxItems > 0 && rawV.Len() > schema.MaxItems {
-		return nil, []error{fmt.Errorf(
-			"%s: attribute supports %d item maximum, config has %d declared", k, schema.MaxItems, rawV.Len())}
+		return append(diags, diag.Diagnostic{
+			Severity:      diag.Error,
+			Summary:       "List longer than MaxItems",
+			Detail:        fmt.Sprintf("Attribute supports %d item maximum, config has %d declared", schema.MaxItems, rawV.Len()),
+			AttributePath: path,
+		})
 	}
 
 	if schema.MinItems > 0 && rawV.Len() < schema.MinItems {
-		return nil, []error{fmt.Errorf(
-			"%s: attribute supports %d item as a minimum, config has %d declared", k, schema.MinItems, rawV.Len())}
+		return append(diags, diag.Diagnostic{
+			Severity:      diag.Error,
+			Summary:       "List shorter than MinItems",
+			Detail:        fmt.Sprintf("Attribute supports %d item minimum, config has %d declared", schema.MinItems, rawV.Len()),
+			AttributePath: path,
+		})
 	}
 
 	// Now build the []interface{}
 	raws := make([]interface{}, rawV.Len())
-	for i, _ := range raws {
+	for i := range raws {
 		raws[i] = rawV.Index(i).Interface()
 	}
 
-	var ws []string
-	var es []error
 	for i, raw := range raws {
 		key := fmt.Sprintf("%s.%d", k, i)
 
@@ -1624,42 +1722,40 @@ func (m schemaMap) validateList(
 			raw = r
 		}
 
-		var ws2 []string
-		var es2 []error
+		p := append(path, cty.IndexStep{Key: cty.NumberIntVal(int64(i))})
+
 		switch t := schema.Elem.(type) {
 		case *Resource:
 			// This is a sub-resource
-			ws2, es2 = m.validateObject(key, t.Schema, c)
+			diags = append(diags, m.validateObject(key, t.Schema, c, p)...)
 		case *Schema:
-			ws2, es2 = m.validateType(key, raw, t, c)
+			diags = append(diags, m.validateType(key, raw, t, c, p)...)
 		}
 
-		if len(ws2) > 0 {
-			ws = append(ws, ws2...)
-		}
-		if len(es2) > 0 {
-			es = append(es, es2...)
-		}
 	}
 
-	return ws, es
+	return diags
 }
 
 func (m schemaMap) validateMap(
 	k string,
 	raw interface{},
 	schema *Schema,
-	c *terraform.ResourceConfig) ([]string, []error) {
+	c *terraform.ResourceConfig,
+	path cty.Path) diag.Diagnostics {
+
+	var diags diag.Diagnostics
+
 	// first check if the list is wholly unknown
 	if s, ok := raw.(string); ok {
 		if s == hcl2shim.UnknownVariableValue {
-			return nil, nil
+			return diags
 		}
 	}
 
 	// schemaMap can't validate nil
 	if raw == nil {
-		return nil, nil
+		return diags
 	}
 	// We use reflection to verify the slice because you can't
 	// case to []interface{} unless the slice is exactly that type.
@@ -1670,93 +1766,124 @@ func (m schemaMap) validateMap(
 		// be rejected.
 		reified, reifiedOk := c.Get(k)
 		if reifiedOk && raw == reified && !c.IsComputed(k) {
-			return nil, []error{fmt.Errorf("%s: should be a map", k)}
+			return append(diags, diag.Diagnostic{
+				Severity:      diag.Error,
+				Summary:       "Attribute should be a map",
+				AttributePath: path,
+			})
 		}
 		// Otherwise it's likely raw is an interpolation.
-		return nil, nil
+		return diags
 	case reflect.Map:
 	case reflect.Slice:
 	default:
-		return nil, []error{fmt.Errorf("%s: should be a map", k)}
+		return append(diags, diag.Diagnostic{
+			Severity:      diag.Error,
+			Summary:       "Attribute should be a map",
+			AttributePath: path,
+		})
 	}
 
 	// If it is not a slice, validate directly
 	if rawV.Kind() != reflect.Slice {
 		mapIface := rawV.Interface()
-		if _, errs := validateMapValues(k, mapIface.(map[string]interface{}), schema); len(errs) > 0 {
-			return nil, errs
+		diags = append(diags, validateMapValues(k, mapIface.(map[string]interface{}), schema, path)...)
+		if diags.HasError() {
+			return diags
 		}
-		if schema.ValidateFunc != nil {
-			return schema.ValidateFunc(mapIface, k)
-		}
-		return nil, nil
+
+		return schema.validateFunc(mapIface, k, path)
 	}
 
 	// It is a slice, verify that all the elements are maps
 	raws := make([]interface{}, rawV.Len())
-	for i, _ := range raws {
+	for i := range raws {
 		raws[i] = rawV.Index(i).Interface()
 	}
 
 	for _, raw := range raws {
 		v := reflect.ValueOf(raw)
 		if v.Kind() != reflect.Map {
-			return nil, []error{fmt.Errorf(
-				"%s: should be a map", k)}
+			return append(diags, diag.Diagnostic{
+				Severity:      diag.Error,
+				Summary:       "Attribute should be a map",
+				AttributePath: path,
+			})
 		}
 		mapIface := v.Interface()
-		if _, errs := validateMapValues(k, mapIface.(map[string]interface{}), schema); len(errs) > 0 {
-			return nil, errs
+		diags = append(diags, validateMapValues(k, mapIface.(map[string]interface{}), schema, path)...)
+		if diags.HasError() {
+			return diags
 		}
 	}
 
-	if schema.ValidateFunc != nil {
-		validatableMap := make(map[string]interface{})
-		for _, raw := range raws {
-			for k, v := range raw.(map[string]interface{}) {
-				validatableMap[k] = v
-			}
+	validatableMap := make(map[string]interface{})
+	for _, raw := range raws {
+		for k, v := range raw.(map[string]interface{}) {
+			validatableMap[k] = v
 		}
-
-		return schema.ValidateFunc(validatableMap, k)
 	}
 
-	return nil, nil
+	return schema.validateFunc(validatableMap, k, path)
 }
 
-func validateMapValues(k string, m map[string]interface{}, schema *Schema) ([]string, []error) {
+func validateMapValues(k string, m map[string]interface{}, schema *Schema, path cty.Path) diag.Diagnostics {
+
+	var diags diag.Diagnostics
+
 	for key, raw := range m {
 		valueType, err := getValueType(k, schema)
+		p := append(path, cty.IndexStep{Key: cty.StringVal(key)})
 		if err != nil {
-			return nil, []error{err}
+			return append(diags, diag.Diagnostic{
+				Severity:      diag.Error,
+				Summary:       err.Error(),
+				AttributePath: p,
+			})
 		}
 
 		switch valueType {
 		case TypeBool:
 			var n bool
 			if err := mapstructure.WeakDecode(raw, &n); err != nil {
-				return nil, []error{fmt.Errorf("%s (%s): %s", k, key, err)}
+				return append(diags, diag.Diagnostic{
+					Severity:      diag.Error,
+					Summary:       err.Error(),
+					AttributePath: p,
+				})
 			}
 		case TypeInt:
 			var n int
 			if err := mapstructure.WeakDecode(raw, &n); err != nil {
-				return nil, []error{fmt.Errorf("%s (%s): %s", k, key, err)}
+				return append(diags, diag.Diagnostic{
+					Severity:      diag.Error,
+					Summary:       err.Error(),
+					AttributePath: p,
+				})
 			}
 		case TypeFloat:
 			var n float64
 			if err := mapstructure.WeakDecode(raw, &n); err != nil {
-				return nil, []error{fmt.Errorf("%s (%s): %s", k, key, err)}
+				return append(diags, diag.Diagnostic{
+					Severity:      diag.Error,
+					Summary:       err.Error(),
+					AttributePath: p,
+				})
 			}
 		case TypeString:
 			var n string
 			if err := mapstructure.WeakDecode(raw, &n); err != nil {
-				return nil, []error{fmt.Errorf("%s (%s): %s", k, key, err)}
+				return append(diags, diag.Diagnostic{
+					Severity:      diag.Error,
+					Summary:       err.Error(),
+					AttributePath: p,
+				})
 			}
 		default:
 			panic(fmt.Sprintf("Unknown validation type: %#v", schema.Type))
 		}
 	}
-	return nil, nil
+	return diags
 }
 
 func getValueType(k string, schema *Schema) (ValueType, error) {
@@ -1785,64 +1912,68 @@ func getValueType(k string, schema *Schema) (ValueType, error) {
 func (m schemaMap) validateObject(
 	k string,
 	schema map[string]*Schema,
-	c *terraform.ResourceConfig) ([]string, []error) {
+	c *terraform.ResourceConfig,
+	path cty.Path) diag.Diagnostics {
+
+	var diags diag.Diagnostics
+
 	raw, _ := c.Get(k)
 
 	// schemaMap can't validate nil
 	if raw == nil {
-		return nil, nil
+		return diags
 	}
 
 	if _, ok := raw.(map[string]interface{}); !ok && !c.IsComputed(k) {
-		return nil, []error{fmt.Errorf(
-			"%s: expected object, got %s",
-			k, reflect.ValueOf(raw).Kind())}
+		return append(diags, diag.Diagnostic{
+			Severity:      diag.Error,
+			Summary:       "Expected Object Type",
+			Detail:        fmt.Sprintf("Expected object, got %s", reflect.ValueOf(raw).Kind()),
+			AttributePath: path,
+		})
 	}
 
-	var ws []string
-	var es []error
 	for subK, s := range schema {
 		key := subK
 		if k != "" {
 			key = fmt.Sprintf("%s.%s", k, subK)
 		}
-
-		ws2, es2 := m.validate(key, s, c)
-		if len(ws2) > 0 {
-			ws = append(ws, ws2...)
-		}
-		if len(es2) > 0 {
-			es = append(es, es2...)
-		}
+		diags = append(diags, m.validate(key, s, c, append(path, cty.GetAttrStep{Name: subK}))...)
 	}
 
 	// Detect any extra/unknown keys and report those as errors.
 	if m, ok := raw.(map[string]interface{}); ok {
-		for subk, _ := range m {
+		for subk := range m {
 			if _, ok := schema[subk]; !ok {
 				if subk == TimeoutsConfigKey {
 					continue
 				}
-				es = append(es, fmt.Errorf(
-					"%s: invalid or unknown key: %s", k, subk))
+				diags = append(diags, diag.Diagnostic{
+					Severity:      diag.Error,
+					Summary:       "Invalid or unknown key",
+					AttributePath: append(path, cty.GetAttrStep{Name: subk}),
+				})
 			}
 		}
 	}
 
-	return ws, es
+	return diags
 }
 
 func (m schemaMap) validatePrimitive(
 	k string,
 	raw interface{},
 	schema *Schema,
-	c *terraform.ResourceConfig) ([]string, []error) {
+	c *terraform.ResourceConfig,
+	path cty.Path) diag.Diagnostics {
+
+	var diags diag.Diagnostics
 
 	// a nil value shouldn't happen in the old protocol, and in the new
 	// protocol the types have already been validated. Either way, we can't
 	// reflect on nil, so don't panic.
 	if raw == nil {
-		return nil, nil
+		return diags
 	}
 
 	// Catch if the user gave a complex type where a primitive was
@@ -1850,20 +1981,24 @@ func (m schemaMap) validatePrimitive(
 	// doesn't contain Go type system terminology.
 	switch reflect.ValueOf(raw).Type().Kind() {
 	case reflect.Slice:
-		return nil, []error{
-			fmt.Errorf("%s must be a single value, not a list", k),
-		}
+		return append(diags, diag.Diagnostic{
+			Severity:      diag.Error,
+			Summary:       "Attribute must be a single value, not a list",
+			AttributePath: path,
+		})
 	case reflect.Map:
-		return nil, []error{
-			fmt.Errorf("%s must be a single value, not a map", k),
-		}
+		return append(diags, diag.Diagnostic{
+			Severity:      diag.Error,
+			Summary:       "Attribute must be a single value, not a map",
+			AttributePath: path,
+		})
 	default: // ok
 	}
 
 	if c.IsComputed(k) {
 		// If the key is being computed, then it is not an error as
 		// long as it's not a slice or map.
-		return nil, nil
+		return diags
 	}
 
 	var decoded interface{}
@@ -1872,81 +2007,91 @@ func (m schemaMap) validatePrimitive(
 		// Verify that we can parse this as the correct type
 		var n bool
 		if err := mapstructure.WeakDecode(raw, &n); err != nil {
-			return nil, []error{fmt.Errorf("%s: %s", k, err)}
+			return append(diags, diag.Diagnostic{
+				Severity:      diag.Error,
+				Summary:       err.Error(),
+				AttributePath: path,
+			})
 		}
 		decoded = n
 	case TypeInt:
-		switch {
-		case isProto5():
-			// We need to verify the type precisely, because WeakDecode will
-			// decode a float as an integer.
+		// We need to verify the type precisely, because WeakDecode will
+		// decode a float as an integer.
 
-			// the config shims only use int for integral number values
-			if v, ok := raw.(int); ok {
-				decoded = v
-			} else {
-				return nil, []error{fmt.Errorf("%s: must be a whole number, got %v", k, raw)}
-			}
-		default:
-			// Verify that we can parse this as an int
-			var n int
-			if err := mapstructure.WeakDecode(raw, &n); err != nil {
-				return nil, []error{fmt.Errorf("%s: %s", k, err)}
-			}
-			decoded = n
+		// the config shims only use int for integral number values
+		if v, ok := raw.(int); ok {
+			decoded = v
+		} else {
+			return append(diags, diag.Diagnostic{
+				Severity:      diag.Error,
+				Summary:       fmt.Sprintf("Attribute must be a whole number, got %v", raw),
+				AttributePath: path,
+			})
 		}
 	case TypeFloat:
 		// Verify that we can parse this as an int
 		var n float64
 		if err := mapstructure.WeakDecode(raw, &n); err != nil {
-			return nil, []error{fmt.Errorf("%s: %s", k, err)}
+			return append(diags, diag.Diagnostic{
+				Severity:      diag.Error,
+				Summary:       err.Error(),
+				AttributePath: path,
+			})
 		}
 		decoded = n
 	case TypeString:
 		// Verify that we can parse this as a string
 		var n string
 		if err := mapstructure.WeakDecode(raw, &n); err != nil {
-			return nil, []error{fmt.Errorf("%s: %s", k, err)}
+			return append(diags, diag.Diagnostic{
+				Severity:      diag.Error,
+				Summary:       err.Error(),
+				AttributePath: path,
+			})
 		}
 		decoded = n
 	default:
 		panic(fmt.Sprintf("Unknown validation type: %#v", schema.Type))
 	}
 
-	if schema.ValidateFunc != nil {
-		return schema.ValidateFunc(decoded, k)
-	}
-
-	return nil, nil
+	return append(diags, schema.validateFunc(decoded, k, path)...)
 }
 
 func (m schemaMap) validateType(
 	k string,
 	raw interface{},
 	schema *Schema,
-	c *terraform.ResourceConfig) ([]string, []error) {
-	var ws []string
-	var es []error
+	c *terraform.ResourceConfig,
+	path cty.Path) diag.Diagnostics {
+
+	var diags diag.Diagnostics
 	switch schema.Type {
-	case TypeSet, TypeList:
-		ws, es = m.validateList(k, raw, schema, c)
+	case TypeList:
+		diags = m.validateList(k, raw, schema, c, path)
+	case TypeSet:
+		// indexing into sets is not representable in the current protocol
+		// best we can do is associate the path up to this attribute.
+		diags = m.validateList(k, raw, schema, c, path)
+		log.Printf("[WARN] Truncating attribute path of %d diagnostics for TypeSet", len(diags))
+		for i := range diags {
+			diags[i].AttributePath = path
+		}
 	case TypeMap:
-		ws, es = m.validateMap(k, raw, schema, c)
+		diags = m.validateMap(k, raw, schema, c, path)
 	default:
-		ws, es = m.validatePrimitive(k, raw, schema, c)
+		diags = m.validatePrimitive(k, raw, schema, c, path)
 	}
 
 	if schema.Deprecated != "" {
-		ws = append(ws, fmt.Sprintf(
-			"%q: [DEPRECATED] %s", k, schema.Deprecated))
+		diags = append(diags, diag.Diagnostic{
+			Severity:      diag.Warning,
+			Summary:       "Deprecated Attribute",
+			Detail:        schema.Deprecated,
+			AttributePath: path,
+		})
 	}
 
-	if schema.Removed != "" {
-		es = append(es, fmt.Errorf(
-			"%q: [REMOVED] %s", k, schema.Removed))
-	}
-
-	return ws, es
+	return diags
 }
 
 // Zero returns the zero value for a type.

@@ -1,13 +1,16 @@
 package schema
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
 	"strconv"
 
-	"github.com/hashicorp/terraform-plugin-sdk/terraform"
-	"github.com/zclconf/go-cty/cty"
+	"github.com/hashicorp/go-cty/cty"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
 )
 
 var ReservedDataSourceFields = []string{
@@ -23,7 +26,6 @@ var ReservedResourceFields = []string{
 	"connection",
 	"count",
 	"depends_on",
-	"id",
 	"lifecycle",
 	"provider",
 	"provisioner",
@@ -63,12 +65,6 @@ type Resource struct {
 	// their Versioning at any integer >= 1
 	SchemaVersion int
 
-	// MigrateState is deprecated and any new changes to a resource's schema
-	// should be handled by StateUpgraders. Existing MigrateState implementations
-	// should remain for compatibility with existing state. MigrateState will
-	// still be called if the stored SchemaVersion is less than the
-	// first version of the StateUpgraders.
-	//
 	// MigrateState is responsible for updating an InstanceState with an old
 	// version to the format expected by the current version of the Schema.
 	//
@@ -79,6 +75,12 @@ type Resource struct {
 	// the InstanceState that needs updating, as well as the configured
 	// provider's configured meta interface{}, in case the migration process
 	// needs to make any remote API calls.
+	//
+	// Deprecated: MigrateState is deprecated and any new changes to a resource's schema
+	// should be handled by StateUpgraders. Existing MigrateState implementations
+	// should remain for compatibility with existing state. MigrateState will
+	// still be called if the stored SchemaVersion is less than the
+	// first version of the StateUpgraders.
 	MigrateState StateMigrateFunc
 
 	// StateUpgraders contains the functions responsible for upgrading an
@@ -95,8 +97,27 @@ type Resource struct {
 
 	// The functions below are the CRUD operations for this resource.
 	//
-	// The only optional operation is Update. If Update is not implemented,
-	// then updates will not be supported for this resource.
+	// Deprecated: Please use the context aware equivalents instead. Only one of
+	// the operations or context aware equivalent can be set, not both.
+	Create CreateFunc
+	Read   ReadFunc
+	Update UpdateFunc
+	Delete DeleteFunc
+
+	// Exists is a function that is called to check if a resource still
+	// exists. If this returns false, then this will affect the diff
+	// accordingly. If this function isn't set, it will not be called. You
+	// can also signal existence in the Read method by calling d.SetId("")
+	// if the Resource is no longer present and should be removed from state.
+	// The *ResourceData passed to Exists should _not_ be modified.
+	//
+	// Deprecated: ReadContext should be able to encapsulate the logic of Exists
+	Exists ExistsFunc
+
+	// The functions below are the CRUD operations for this resource.
+	//
+	// The only optional operation is Update. If Update is not
+	// implemented, then updates will not be supported for this resource.
 	//
 	// The ResourceData parameter in the functions below are used to
 	// query configuration and changes for the resource as well as to set
@@ -107,21 +128,19 @@ type Resource struct {
 	// a ConfigureFunc, this will be nil. This parameter should be used
 	// to store API clients, configuration structures, etc.
 	//
-	// If any errors occur during each of the operation, an error should be
-	// returned. If a resource was partially updated, be careful to enable
-	// partial state mode for ResourceData and use it accordingly.
+	// These functions are passed a context configured to timeout with whatever
+	// was set as the timeout for this operation. Useful for forwarding on to
+	// backend SDK's that accept context. The context will also cancel if
+	// Terraform sends a cancellation signal.
 	//
-	// Exists is a function that is called to check if a resource still
-	// exists. If this returns false, then this will affect the diff
-	// accordingly. If this function isn't set, it will not be called. You
-	// can also signal existence in the Read method by calling d.SetId("")
-	// if the Resource is no longer present and should be removed from state.
-	// The *ResourceData passed to Exists should _not_ be modified.
-	Create CreateFunc
-	Read   ReadFunc
-	Update UpdateFunc
-	Delete DeleteFunc
-	Exists ExistsFunc
+	// These functions return diagnostics, allowing developers to build
+	// a list of warnings and errors to be presented to the Terraform user.
+	// The AttributePath of those diagnostics should be built within these
+	// functions, please consult go-cty documentation for building a cty.Path
+	CreateContext CreateContextFunc
+	ReadContext   ReadContextFunc
+	UpdateContext UpdateContextFunc
+	DeleteContext DeleteContextFunc
 
 	// CustomizeDiff is a custom function for working with the diff that
 	// Terraform has created for this resource - it can be used to customize the
@@ -142,11 +161,6 @@ type Resource struct {
 	//  * Destroy: No runs (standard diff logic is skipped on destroy diffs)
 	//
 	// This function needs to be resilient to support all scenarios.
-	//
-	// If this function needs to access external API resources, remember to flag
-	// the RequiresRefresh attribute mentioned below to ensure that
-	// -refresh=false is blocked when running plan or apply, as this means that
-	// this resource requires refresh-like behaviour to work effectively.
 	//
 	// For the most part, only computed fields can be customized by this
 	// function.
@@ -172,6 +186,11 @@ type Resource struct {
 	// actions (Create, Read, Update, Delete, Default) to the Resource struct, and
 	// accessing them in the matching methods.
 	Timeouts *ResourceTimeout
+
+	// Description is used as the description for docs, the language server and
+	// other user facing usage. It can be plain-text or markdown depending on the
+	// global DescriptionKind setting.
+	Description string
 }
 
 // ShimInstanceStateFromValue converts a cty.Value to a
@@ -195,20 +214,26 @@ func (r *Resource) ShimInstanceStateFromValue(state cty.Value) (*terraform.Insta
 	return s, nil
 }
 
-// See Resource documentation.
+// The following function types are of the legacy CRUD operations.
+//
+// Deprecated: Please use the context aware equivalents instead.
 type CreateFunc func(*ResourceData, interface{}) error
-
-// See Resource documentation.
 type ReadFunc func(*ResourceData, interface{}) error
-
-// See Resource documentation.
 type UpdateFunc func(*ResourceData, interface{}) error
-
-// See Resource documentation.
 type DeleteFunc func(*ResourceData, interface{}) error
+type ExistsFunc func(*ResourceData, interface{}) (bool, error)
 
 // See Resource documentation.
-type ExistsFunc func(*ResourceData, interface{}) (bool, error)
+type CreateContextFunc func(context.Context, *ResourceData, interface{}) diag.Diagnostics
+
+// See Resource documentation.
+type ReadContextFunc func(context.Context, *ResourceData, interface{}) diag.Diagnostics
+
+// See Resource documentation.
+type UpdateContextFunc func(context.Context, *ResourceData, interface{}) diag.Diagnostics
+
+// See Resource documentation.
+type DeleteContextFunc func(context.Context, *ResourceData, interface{}) diag.Diagnostics
 
 // See Resource documentation.
 type StateMigrateFunc func(
@@ -233,19 +258,72 @@ type StateUpgrader struct {
 }
 
 // See StateUpgrader
-type StateUpgradeFunc func(rawState map[string]interface{}, meta interface{}) (map[string]interface{}, error)
+type StateUpgradeFunc func(ctx context.Context, rawState map[string]interface{}, meta interface{}) (map[string]interface{}, error)
 
 // See Resource documentation.
-type CustomizeDiffFunc func(*ResourceDiff, interface{}) error
+type CustomizeDiffFunc func(context.Context, *ResourceDiff, interface{}) error
+
+func (r *Resource) create(ctx context.Context, d *ResourceData, meta interface{}) diag.Diagnostics {
+	if r.Create != nil {
+		if err := r.Create(d, meta); err != nil {
+			return diag.FromErr(err)
+		}
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, d.Timeout(TimeoutCreate))
+	defer cancel()
+	return r.CreateContext(ctx, d, meta)
+}
+
+func (r *Resource) read(ctx context.Context, d *ResourceData, meta interface{}) diag.Diagnostics {
+	if r.Read != nil {
+		if err := r.Read(d, meta); err != nil {
+			return diag.FromErr(err)
+		}
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, d.Timeout(TimeoutRead))
+	defer cancel()
+	return r.ReadContext(ctx, d, meta)
+}
+
+func (r *Resource) update(ctx context.Context, d *ResourceData, meta interface{}) diag.Diagnostics {
+	if r.Update != nil {
+		if err := r.Update(d, meta); err != nil {
+			return diag.FromErr(err)
+		}
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, d.Timeout(TimeoutUpdate))
+	defer cancel()
+	return r.UpdateContext(ctx, d, meta)
+}
+
+func (r *Resource) delete(ctx context.Context, d *ResourceData, meta interface{}) diag.Diagnostics {
+	if r.Delete != nil {
+		if err := r.Delete(d, meta); err != nil {
+			return diag.FromErr(err)
+		}
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, d.Timeout(TimeoutDelete))
+	defer cancel()
+	return r.DeleteContext(ctx, d, meta)
+}
 
 // Apply creates, updates, and/or deletes a resource.
 func (r *Resource) Apply(
+	ctx context.Context,
 	s *terraform.InstanceState,
 	d *terraform.InstanceDiff,
-	meta interface{}) (*terraform.InstanceState, error) {
+	meta interface{}) (*terraform.InstanceState, diag.Diagnostics) {
 	data, err := schemaMap(r.Schema).Data(s, d)
 	if err != nil {
-		return s, err
+		return s, diag.FromErr(err)
+	}
+
+	if s != nil && data != nil {
+		data.providerMeta = s.ProviderMeta
 	}
 
 	// Instance Diff shoould have the timeout info, need to copy it over to the
@@ -272,11 +350,14 @@ func (r *Resource) Apply(
 		s = new(terraform.InstanceState)
 	}
 
+	var diags diag.Diagnostics
+
 	if d.Destroy || d.RequiresNew() {
 		if s.ID != "" {
 			// Destroy the resource since it is created
-			if err := r.Delete(data, meta); err != nil {
-				return r.recordCurrentSchemaVersion(data.State()), err
+			diags = append(diags, r.delete(ctx, data, meta)...)
+			if diags.HasError() {
+				return r.recordCurrentSchemaVersion(data.State()), diags
 			}
 
 			// Make sure the ID is gone.
@@ -286,36 +367,39 @@ func (r *Resource) Apply(
 		// If we're only destroying, and not creating, then return
 		// now since we're done!
 		if !d.RequiresNew() {
-			return nil, nil
+			return nil, diags
 		}
 
 		// Reset the data to be stateless since we just destroyed
 		data, err = schemaMap(r.Schema).Data(nil, d)
+		if err != nil {
+			return nil, append(diags, diag.FromErr(err)...)
+		}
+
 		// data was reset, need to re-apply the parsed timeouts
 		data.timeouts = &rt
-		if err != nil {
-			return nil, err
-		}
 	}
 
-	err = nil
 	if data.Id() == "" {
 		// We're creating, it is a new resource.
 		data.MarkNewResource()
-		err = r.Create(data, meta)
+		diags = append(diags, r.create(ctx, data, meta)...)
 	} else {
-		if r.Update == nil {
-			return s, fmt.Errorf("doesn't support update")
+		if !r.updateFuncSet() {
+			return s, append(diags, diag.Diagnostic{
+				Severity: diag.Error,
+				Summary:  "doesn't support update",
+			})
 		}
-
-		err = r.Update(data, meta)
+		diags = append(diags, r.update(ctx, data, meta)...)
 	}
 
-	return r.recordCurrentSchemaVersion(data.State()), err
+	return r.recordCurrentSchemaVersion(data.State()), diags
 }
 
 // Diff returns a diff of this resource.
 func (r *Resource) Diff(
+	ctx context.Context,
 	s *terraform.InstanceState,
 	c *terraform.ResourceConfig,
 	meta interface{}) (*terraform.InstanceDiff, error) {
@@ -327,7 +411,7 @@ func (r *Resource) Diff(
 		return nil, fmt.Errorf("[ERR] Error decoding timeout: %s", err)
 	}
 
-	instanceDiff, err := schemaMap(r.Schema).Diff(s, c, r.CustomizeDiff, meta, true)
+	instanceDiff, err := schemaMap(r.Schema).Diff(ctx, s, c, r.CustomizeDiff, meta, true)
 	if err != nil {
 		return instanceDiff, err
 	}
@@ -343,12 +427,13 @@ func (r *Resource) Diff(
 	return instanceDiff, err
 }
 
-func (r *Resource) simpleDiff(
+func (r *Resource) SimpleDiff(
+	ctx context.Context,
 	s *terraform.InstanceState,
 	c *terraform.ResourceConfig,
 	meta interface{}) (*terraform.InstanceDiff, error) {
 
-	instanceDiff, err := schemaMap(r.Schema).Diff(s, c, r.CustomizeDiff, meta, false)
+	instanceDiff, err := schemaMap(r.Schema).Diff(ctx, s, c, r.CustomizeDiff, meta, false)
 	if err != nil {
 		return instanceDiff, err
 	}
@@ -372,30 +457,35 @@ func (r *Resource) simpleDiff(
 }
 
 // Validate validates the resource configuration against the schema.
-func (r *Resource) Validate(c *terraform.ResourceConfig) ([]string, []error) {
-	warns, errs := schemaMap(r.Schema).Validate(c)
+func (r *Resource) Validate(c *terraform.ResourceConfig) diag.Diagnostics {
+	diags := schemaMap(r.Schema).Validate(c)
 
 	if r.DeprecationMessage != "" {
-		warns = append(warns, r.DeprecationMessage)
+		diags = append(diags, diag.Diagnostic{
+			Severity: diag.Warning,
+			Summary:  "Deprecated Resource",
+			Detail:   r.DeprecationMessage,
+		})
 	}
 
-	return warns, errs
+	return diags
 }
 
 // ReadDataApply loads the data for a data source, given a diff that
 // describes the configuration arguments and desired computed attributes.
 func (r *Resource) ReadDataApply(
+	ctx context.Context,
 	d *terraform.InstanceDiff,
 	meta interface{},
-) (*terraform.InstanceState, error) {
+) (*terraform.InstanceState, diag.Diagnostics) {
 	// Data sources are always built completely from scratch
 	// on each read, so the source state is always nil.
 	data, err := schemaMap(r.Schema).Data(nil, d)
 	if err != nil {
-		return nil, err
+		return nil, diag.FromErr(err)
 	}
 
-	err = r.Read(data, meta)
+	diags := r.read(ctx, data, meta)
 	state := data.State()
 	if state != nil && state.ID == "" {
 		// Data sources can set an ID if they want, but they aren't
@@ -405,7 +495,7 @@ func (r *Resource) ReadDataApply(
 		state.ID = "-"
 	}
 
-	return r.recordCurrentSchemaVersion(state), err
+	return r.recordCurrentSchemaVersion(state), diags
 }
 
 // RefreshWithoutUpgrade reads the instance state, but does not call
@@ -413,8 +503,9 @@ func (r *Resource) ReadDataApply(
 // separate API call.
 // RefreshWithoutUpgrade is part of the new plugin shims.
 func (r *Resource) RefreshWithoutUpgrade(
+	ctx context.Context,
 	s *terraform.InstanceState,
-	meta interface{}) (*terraform.InstanceState, error) {
+	meta interface{}) (*terraform.InstanceState, diag.Diagnostics) {
 	// If the ID is already somehow blank, it doesn't exist
 	if s.ID == "" {
 		return nil, nil
@@ -431,155 +522,58 @@ func (r *Resource) RefreshWithoutUpgrade(
 		// Make a copy of data so that if it is modified it doesn't
 		// affect our Read later.
 		data, err := schemaMap(r.Schema).Data(s, nil)
+		if err != nil {
+			return s, diag.FromErr(err)
+		}
 		data.timeouts = &rt
 
-		if err != nil {
-			return s, err
+		if s != nil {
+			data.providerMeta = s.ProviderMeta
 		}
 
 		exists, err := r.Exists(data, meta)
 		if err != nil {
-			return s, err
+			return s, diag.FromErr(err)
 		}
+
 		if !exists {
 			return nil, nil
 		}
 	}
 
 	data, err := schemaMap(r.Schema).Data(s, nil)
-	data.timeouts = &rt
 	if err != nil {
-		return s, err
+		return s, diag.FromErr(err)
+	}
+	data.timeouts = &rt
+
+	if s != nil {
+		data.providerMeta = s.ProviderMeta
 	}
 
-	err = r.Read(data, meta)
+	diags := r.read(ctx, data, meta)
 	state := data.State()
 	if state != nil && state.ID == "" {
 		state = nil
 	}
 
-	return r.recordCurrentSchemaVersion(state), err
+	return r.recordCurrentSchemaVersion(state), diags
 }
 
-// Refresh refreshes the state of the resource.
-func (r *Resource) Refresh(
-	s *terraform.InstanceState,
-	meta interface{}) (*terraform.InstanceState, error) {
-	// If the ID is already somehow blank, it doesn't exist
-	if s.ID == "" {
-		return nil, nil
-	}
-
-	rt := ResourceTimeout{}
-	if _, ok := s.Meta[TimeoutKey]; ok {
-		if err := rt.StateDecode(s); err != nil {
-			log.Printf("[ERR] Error decoding ResourceTimeout: %s", err)
-		}
-	}
-
-	if r.Exists != nil {
-		// Make a copy of data so that if it is modified it doesn't
-		// affect our Read later.
-		data, err := schemaMap(r.Schema).Data(s, nil)
-		data.timeouts = &rt
-
-		if err != nil {
-			return s, err
-		}
-
-		exists, err := r.Exists(data, meta)
-		if err != nil {
-			return s, err
-		}
-		if !exists {
-			return nil, nil
-		}
-	}
-
-	// there may be new StateUpgraders that need to be run
-	s, err := r.upgradeState(s, meta)
-	if err != nil {
-		return s, err
-	}
-
-	data, err := schemaMap(r.Schema).Data(s, nil)
-	data.timeouts = &rt
-	if err != nil {
-		return s, err
-	}
-
-	err = r.Read(data, meta)
-	state := data.State()
-	if state != nil && state.ID == "" {
-		state = nil
-	}
-
-	return r.recordCurrentSchemaVersion(state), err
+func (r *Resource) createFuncSet() bool {
+	return (r.Create != nil || r.CreateContext != nil)
 }
 
-func (r *Resource) upgradeState(s *terraform.InstanceState, meta interface{}) (*terraform.InstanceState, error) {
-	var err error
+func (r *Resource) readFuncSet() bool {
+	return (r.Read != nil || r.ReadContext != nil)
+}
 
-	needsMigration, stateSchemaVersion := r.checkSchemaVersion(s)
-	migrate := needsMigration && r.MigrateState != nil
+func (r *Resource) updateFuncSet() bool {
+	return (r.Update != nil || r.UpdateContext != nil)
+}
 
-	if migrate {
-		s, err = r.MigrateState(stateSchemaVersion, s, meta)
-		if err != nil {
-			return s, err
-		}
-	}
-
-	if len(r.StateUpgraders) == 0 {
-		return s, nil
-	}
-
-	// If we ran MigrateState, then the stateSchemaVersion value is no longer
-	// correct. We can expect the first upgrade function to be the correct
-	// schema type version.
-	if migrate {
-		stateSchemaVersion = r.StateUpgraders[0].Version
-	}
-
-	schemaType := r.CoreConfigSchema().ImpliedType()
-	// find the expected type to convert the state
-	for _, upgrader := range r.StateUpgraders {
-		if stateSchemaVersion == upgrader.Version {
-			schemaType = upgrader.Type
-		}
-	}
-
-	// StateUpgraders only operate on the new JSON format state, so the state
-	// need to be converted.
-	stateVal, err := StateValueFromInstanceState(s, schemaType)
-	if err != nil {
-		return nil, err
-	}
-
-	jsonState, err := StateValueToJSONMap(stateVal, schemaType)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, upgrader := range r.StateUpgraders {
-		if stateSchemaVersion != upgrader.Version {
-			continue
-		}
-
-		jsonState, err = upgrader.Upgrade(jsonState, meta)
-		if err != nil {
-			return nil, err
-		}
-		stateSchemaVersion++
-	}
-
-	// now we need to re-flatmap the new state
-	stateVal, err = JSONMapToStateValue(jsonState, r.CoreConfigSchema())
-	if err != nil {
-		return nil, err
-	}
-
-	return r.ShimInstanceStateFromValue(stateVal)
+func (r *Resource) deleteFuncSet() bool {
+	return (r.Delete != nil || r.DeleteContext != nil)
 }
 
 // InternalValidate should be called to validate the structure
@@ -598,7 +592,7 @@ func (r *Resource) InternalValidate(topSchemaMap schemaMap, writable bool) error
 	}
 
 	if !writable {
-		if r.Create != nil || r.Update != nil || r.Delete != nil {
+		if r.createFuncSet() || r.updateFuncSet() || r.deleteFuncSet() {
 			return fmt.Errorf("must not implement Create, Update or Delete")
 		}
 
@@ -612,7 +606,7 @@ func (r *Resource) InternalValidate(topSchemaMap schemaMap, writable bool) error
 
 	if r.isTopLevel() && writable {
 		// All non-Computed attributes must be ForceNew if Update is not defined
-		if r.Update == nil {
+		if !r.updateFuncSet() {
 			nonForceNewAttrs := make([]string, 0)
 			for k, v := range r.Schema {
 				if !v.ForceNew && !v.Computed {
@@ -640,16 +634,24 @@ func (r *Resource) InternalValidate(topSchemaMap schemaMap, writable bool) error
 		tsm = schemaMap(r.Schema)
 
 		// Destroy, and Read are required
-		if r.Read == nil {
+		if !r.readFuncSet() {
 			return fmt.Errorf("Read must be implemented")
 		}
-		if r.Delete == nil {
+		if !r.deleteFuncSet() {
 			return fmt.Errorf("Delete must be implemented")
 		}
 
 		// If we have an importer, we need to verify the importer.
 		if r.Importer != nil {
 			if err := r.Importer.InternalValidate(); err != nil {
+				return err
+			}
+		}
+
+		if f, ok := tsm["id"]; ok {
+			// if there is an explicit ID, validate it...
+			err := validateResourceID(f)
+			if err != nil {
 				return err
 			}
 		}
@@ -689,11 +691,25 @@ func (r *Resource) InternalValidate(topSchemaMap schemaMap, writable bool) error
 	// Data source
 	if r.isTopLevel() && !writable {
 		tsm = schemaMap(r.Schema)
-		for k, _ := range tsm {
+		for k := range tsm {
 			if isReservedDataSourceFieldName(k) {
 				return fmt.Errorf("%s is a reserved field name", k)
 			}
 		}
+	}
+
+	// check context funcs are not set alongside their nonctx counterparts
+	if r.CreateContext != nil && r.Create != nil {
+		return fmt.Errorf("CreateContext and Create should not both be set")
+	}
+	if r.ReadContext != nil && r.Read != nil {
+		return fmt.Errorf("ReadContext and Read should not both be set")
+	}
+	if r.UpdateContext != nil && r.Update != nil {
+		return fmt.Errorf("UpdateContext and Update should not both be set")
+	}
+	if r.DeleteContext != nil && r.Delete != nil {
+		return fmt.Errorf("DeleteContext and Delete should not both be set")
 	}
 
 	return schemaMap(r.Schema).InternalValidate(tsm)
@@ -708,18 +724,30 @@ func isReservedDataSourceFieldName(name string) bool {
 	return false
 }
 
-func isReservedResourceFieldName(name string, s *Schema) bool {
-	// Allow phasing out "id"
-	// See https://github.com/terraform-providers/terraform-provider-aws/pull/1626#issuecomment-328881415
-	if name == "id" && (s.Deprecated != "" || s.Removed != "") {
-		return false
+func validateResourceID(s *Schema) error {
+	if s.Type != TypeString {
+		return fmt.Errorf(`the "id" attribute must be of TypeString`)
 	}
 
+	if s.Required {
+		return fmt.Errorf(`the "id" attribute cannot be marked Required`)
+	}
+
+	// ID should at least be computed. If unspecified it will be set to Computed and Optional,
+	// but Optional is unnecessary if undesired.
+	if s.Computed != true {
+		return fmt.Errorf(`the "id" attribute must be marked Computed`)
+	}
+	return nil
+}
+
+func isReservedResourceFieldName(name string, s *Schema) bool {
 	for _, reservedName := range ReservedResourceFields {
 		if name == reservedName {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -762,47 +790,10 @@ func (r *Resource) TestResourceData() *ResourceData {
 	}
 }
 
-// SchemasForFlatmapPath tries its best to find a sequence of schemas that
-// the given dot-delimited attribute path traverses through in the schema
-// of the receiving Resource.
-func (r *Resource) SchemasForFlatmapPath(path string) []*Schema {
-	return SchemasForFlatmapPath(path, r.Schema)
-}
-
 // Returns true if the resource is "top level" i.e. not a sub-resource.
 func (r *Resource) isTopLevel() bool {
 	// TODO: This is a heuristic; replace with a definitive attribute?
-	return (r.Create != nil || r.Read != nil)
-}
-
-// Determines if a given InstanceState needs to be migrated by checking the
-// stored version number with the current SchemaVersion
-func (r *Resource) checkSchemaVersion(is *terraform.InstanceState) (bool, int) {
-	// Get the raw interface{} value for the schema version. If it doesn't
-	// exist or is nil then set it to zero.
-	raw := is.Meta["schema_version"]
-	if raw == nil {
-		raw = "0"
-	}
-
-	// Try to convert it to a string. If it isn't a string then we pretend
-	// that it isn't set at all. It should never not be a string unless it
-	// was manually tampered with.
-	rawString, ok := raw.(string)
-	if !ok {
-		rawString = "0"
-	}
-
-	stateSchemaVersion, _ := strconv.Atoi(rawString)
-
-	// Don't run MigrateState if the version is handled by a StateUpgrader,
-	// since StateMigrateFuncs are not required to handle unknown versions
-	maxVersion := r.SchemaVersion
-	if len(r.StateUpgraders) > 0 {
-		maxVersion = r.StateUpgraders[0].Version
-	}
-
-	return stateSchemaVersion < maxVersion, stateSchemaVersion
+	return (r.createFuncSet() || r.readFuncSet())
 }
 
 func (r *Resource) recordCurrentSchemaVersion(
@@ -819,6 +810,12 @@ func (r *Resource) recordCurrentSchemaVersion(
 // Noop is a convenience implementation of resource function which takes
 // no action and returns no error.
 func Noop(*ResourceData, interface{}) error {
+	return nil
+}
+
+// NoopContext is a convenience implementation of context aware resource function which takes
+// no action and returns no error.
+func NoopContext(context.Context, *ResourceData, interface{}) diag.Diagnostics {
 	return nil
 }
 
