@@ -3,14 +3,11 @@ package command
 import (
 	"bytes"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 
-	"github.com/hashicorp/go-getter"
 	"github.com/hashicorp/terraform/addrs"
 	"github.com/hashicorp/terraform/backend"
-	"github.com/hashicorp/terraform/configs/hcl2shim"
 	"github.com/hashicorp/terraform/repl"
 	"github.com/hashicorp/terraform/states"
 	"github.com/hashicorp/terraform/tfdiags"
@@ -53,11 +50,7 @@ func (c *ApplyCommand) Run(args []string) int {
 
 	var diags tfdiags.Diagnostics
 
-	// Get the args. The "maybeInit" flag tracks whether we may need to
-	// initialize the configuration from a remote path. This is true as long
-	// as we have an argument.
 	args = cmdFlags.Args()
-	maybeInit := len(args) == 1
 	configPath, err := ModulePath(args)
 	if err != nil {
 		c.Ui.Error(err.Error())
@@ -68,32 +61,6 @@ func (c *ApplyCommand) Run(args []string) int {
 	if c.pluginPath, err = c.loadPluginPath(); err != nil {
 		c.Ui.Error(fmt.Sprintf("Error loading plugin path: %s", err))
 		return 1
-	}
-
-	if !c.Destroy && maybeInit {
-		// We need the pwd for the getter operation below
-		pwd, err := os.Getwd()
-		if err != nil {
-			c.Ui.Error(fmt.Sprintf("Error getting pwd: %s", err))
-			return 1
-		}
-
-		// Do a detect to determine if we need to do an init + apply.
-		if detected, err := getter.Detect(configPath, pwd, getter.Detectors); err != nil {
-			c.Ui.Error(fmt.Sprintf("Invalid path: %s", err))
-			return 1
-		} else if !strings.HasPrefix(detected, "file") {
-			// If this isn't a file URL then we're doing an init +
-			// apply.
-			var init InitCommand
-			init.Meta = c.Meta
-			if code := init.Run([]string{detected}); code != 0 {
-				return code
-			}
-
-			// Change the config path to be the cwd
-			configPath = pwd
-		}
 	}
 
 	// Check if the path is a plan
@@ -163,6 +130,11 @@ func (c *ApplyCommand) Run(args []string) int {
 		c.showDiagnostics(diags)
 		return 1
 	}
+
+	// Applying changes with dev overrides in effect could make it impossible
+	// to switch back to a release version if the schema isn't compatible,
+	// so we'll warn about it.
+	diags = diags.Append(c.providerDevOverrideWarnings())
 
 	// Before we delegate to the backend, we'll print any warning diagnostics
 	// we've accumulated here, since the backend will start fresh with its own
@@ -377,17 +349,7 @@ func outputsAsString(state *states.State, modPath addrs.ModuleInstance, includeH
 				continue
 			}
 
-			// Our formatter still wants an old-style raw interface{} value, so
-			// for now we'll just shim it.
-			// FIXME: Port the formatter to work with cty.Value directly.
-			legacyVal := hcl2shim.ConfigValueFromHCL2(v.Value)
-			result, err := repl.FormatResult(legacyVal)
-			if err != nil {
-				// We can't really return errors from here, so we'll just have
-				// to stub this out. This shouldn't happen in practice anyway.
-				result = "<error during formatting>"
-			}
-
+			result := repl.FormatValue(v.Value, 0)
 			outputBuf.WriteString(fmt.Sprintf("%s = %s\n", k, result))
 		}
 	}

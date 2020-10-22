@@ -1,6 +1,7 @@
 package getproviders
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -20,8 +21,8 @@ import (
 	svcauth "github.com/hashicorp/terraform-svchost/auth"
 
 	"github.com/hashicorp/terraform/addrs"
-	"github.com/hashicorp/terraform/helper/logging"
 	"github.com/hashicorp/terraform/httpclient"
+	"github.com/hashicorp/terraform/internal/logging"
 	"github.com/hashicorp/terraform/version"
 )
 
@@ -76,12 +77,7 @@ func newRegistryClient(baseURL *url.URL, creds svcauth.HostCredentials) *registr
 	retryableClient.RequestLogHook = requestLogHook
 	retryableClient.ErrorHandler = maxRetryErrorHandler
 
-	logOutput, err := logging.LogOutput()
-	if err != nil {
-		log.Printf("[WARN] Failed to set up registry client logger, "+
-			"continuing without client logging: %s", err)
-	}
-	retryableClient.Logger = log.New(logOutput, "", log.Flags())
+	retryableClient.Logger = log.New(logging.LogOutput(), "", log.Flags())
 
 	return &registryClient{
 		baseURL:    baseURL,
@@ -93,28 +89,28 @@ func newRegistryClient(baseURL *url.URL, creds svcauth.HostCredentials) *registr
 // ProviderVersions returns the raw version and protocol strings produced by the
 // registry for the given provider.
 //
-// The returned error will be ErrProviderNotKnown if the registry responds with
+// The returned error will be ErrRegistryProviderNotKnown if the registry responds with
 // 404 Not Found to indicate that the namespace or provider type are not known,
 // ErrUnauthorized if the registry responds with 401 or 403 status codes, or
 // ErrQueryFailed for any other protocol or operational problem.
-func (c *registryClient) ProviderVersions(addr addrs.Provider) (map[string][]string, error) {
+func (c *registryClient) ProviderVersions(ctx context.Context, addr addrs.Provider) (map[string][]string, []string, error) {
 	endpointPath, err := url.Parse(path.Join(addr.Namespace, addr.Type, "versions"))
 	if err != nil {
 		// Should never happen because we're constructing this from
 		// already-validated components.
-		return nil, err
+		return nil, nil, err
 	}
 	endpointURL := c.baseURL.ResolveReference(endpointPath)
-
 	req, err := retryablehttp.NewRequest("GET", endpointURL.String(), nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	req = req.WithContext(ctx)
 	c.addHeadersToRequest(req.Request)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, c.errQueryFailed(addr, err)
+		return nil, nil, c.errQueryFailed(addr, err)
 	}
 	defer resp.Body.Close()
 
@@ -122,13 +118,13 @@ func (c *registryClient) ProviderVersions(addr addrs.Provider) (map[string][]str
 	case http.StatusOK:
 		// Great!
 	case http.StatusNotFound:
-		return nil, ErrProviderNotKnown{
+		return nil, nil, ErrRegistryProviderNotKnown{
 			Provider: addr,
 		}
 	case http.StatusUnauthorized, http.StatusForbidden:
-		return nil, c.errUnauthorized(addr.Hostname)
+		return nil, nil, c.errUnauthorized(addr.Hostname)
 	default:
-		return nil, c.errQueryFailed(addr, errors.New(resp.Status))
+		return nil, nil, c.errQueryFailed(addr, errors.New(resp.Status))
 	}
 
 	// We ignore the platforms portion of the response body, because the
@@ -139,23 +135,25 @@ func (c *registryClient) ProviderVersions(addr addrs.Provider) (map[string][]str
 			Version   string   `json:"version"`
 			Protocols []string `json:"protocols"`
 		} `json:"versions"`
+		Warnings []string `json:"warnings"`
 	}
 	var body ResponseBody
 
 	dec := json.NewDecoder(resp.Body)
 	if err := dec.Decode(&body); err != nil {
-		return nil, c.errQueryFailed(addr, err)
+		return nil, nil, c.errQueryFailed(addr, err)
 	}
 
 	if len(body.Versions) == 0 {
-		return nil, nil
+		return nil, body.Warnings, nil
 	}
 
 	ret := make(map[string][]string, len(body.Versions))
 	for _, v := range body.Versions {
 		ret[v.Version] = v.Protocols
 	}
-	return ret, nil
+
+	return ret, body.Warnings, nil
 }
 
 // PackageMeta returns metadata about a distribution package for a provider.
@@ -169,7 +167,7 @@ func (c *registryClient) ProviderVersions(addr addrs.Provider) (map[string][]str
 //     supported by this version of terraform.
 //   - ErrUnauthorized if the registry responds with 401 or 403 status codes
 //   - ErrQueryFailed for any other operational problem.
-func (c *registryClient) PackageMeta(provider addrs.Provider, version Version, target Platform) (PackageMeta, error) {
+func (c *registryClient) PackageMeta(ctx context.Context, provider addrs.Provider, version Version, target Platform) (PackageMeta, error) {
 	endpointPath, err := url.Parse(path.Join(
 		provider.Namespace,
 		provider.Type,
@@ -189,6 +187,7 @@ func (c *registryClient) PackageMeta(provider addrs.Provider, version Version, t
 	if err != nil {
 		return PackageMeta{}, err
 	}
+	req = req.WithContext(ctx)
 	c.addHeadersToRequest(req.Request)
 
 	resp, err := c.httpClient.Do(req)
@@ -265,13 +264,17 @@ func (c *registryClient) PackageMeta(provider addrs.Provider, version Version, t
 		if match == false {
 			// If the protocol version is not supported, try to find the closest
 			// matching version.
-			closest, err := c.findClosestProtocolCompatibleVersion(provider, version)
+			closest, err := c.findClosestProtocolCompatibleVersion(ctx, provider, version)
 			if err != nil {
 				return PackageMeta{}, err
 			}
 			protoErr.Suggestion = closest
 			return PackageMeta{}, protoErr
 		}
+	}
+
+	if body.OS != target.OS || body.Arch != target.Arch {
+		return PackageMeta{}, fmt.Errorf("registry response to request for %s archive has incorrect target %s", target, Platform{body.OS, body.Arch})
 	}
 
 	downloadURL, err := url.Parse(body.DownloadURL)
@@ -350,18 +353,17 @@ func (c *registryClient) PackageMeta(provider addrs.Provider, version Version, t
 
 	ret.Authentication = PackageAuthenticationAll(
 		NewMatchingChecksumAuthentication(document, body.Filename, checksum),
-		NewArchiveChecksumAuthentication(checksum),
+		NewArchiveChecksumAuthentication(ret.TargetPlatform, checksum),
 		NewSignatureAuthentication(document, signature, keys),
 	)
 
 	return ret, nil
 }
 
-// LegacyProviderDefaultNamespace returns the raw address strings produced by
 // findClosestProtocolCompatibleVersion searches for the provider version with the closest protocol match.
-func (c *registryClient) findClosestProtocolCompatibleVersion(provider addrs.Provider, version Version) (Version, error) {
+func (c *registryClient) findClosestProtocolCompatibleVersion(ctx context.Context, provider addrs.Provider, version Version) (Version, error) {
 	var match Version
-	available, err := c.ProviderVersions(provider)
+	available, _, err := c.ProviderVersions(ctx, provider)
 	if err != nil {
 		return UnspecifiedVersion, err
 	}
@@ -401,73 +403,6 @@ FindMatch:
 	return match, nil
 }
 
-// LegacyProviderCanonicalAddress returns the raw address strings produced by
-// the registry when asked about the given unqualified provider type name.
-// The returned namespace string is taken verbatim from the registry's response.
-//
-// This method exists only to allow compatibility with unqualified names
-// in older configurations. New configurations should be written so as not to
-// depend on it.
-func (c *registryClient) LegacyProviderDefaultNamespace(typeName string) (string, error) {
-	endpointPath, err := url.Parse(path.Join("-", typeName, "versions"))
-	if err != nil {
-		// Should never happen because we're constructing this from
-		// already-validated components.
-		return "", err
-	}
-	endpointURL := c.baseURL.ResolveReference(endpointPath)
-
-	req, err := retryablehttp.NewRequest("GET", endpointURL.String(), nil)
-	if err != nil {
-		return "", err
-	}
-	c.addHeadersToRequest(req.Request)
-
-	// This is just to give us something to return in error messages. It's
-	// not a proper provider address.
-	placeholderProviderAddr := addrs.NewLegacyProvider(typeName)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return "", c.errQueryFailed(placeholderProviderAddr, err)
-	}
-	defer resp.Body.Close()
-
-	switch resp.StatusCode {
-	case http.StatusOK:
-		// Great!
-	case http.StatusNotFound:
-		return "", ErrProviderNotKnown{
-			Provider: placeholderProviderAddr,
-		}
-	case http.StatusUnauthorized, http.StatusForbidden:
-		return "", c.errUnauthorized(placeholderProviderAddr.Hostname)
-	default:
-		return "", c.errQueryFailed(placeholderProviderAddr, errors.New(resp.Status))
-	}
-
-	type ResponseBody struct {
-		Id string
-	}
-	var body ResponseBody
-
-	dec := json.NewDecoder(resp.Body)
-	if err := dec.Decode(&body); err != nil {
-		return "", c.errQueryFailed(placeholderProviderAddr, err)
-	}
-
-	provider, diags := addrs.ParseProviderSourceString(body.Id)
-	if diags.HasErrors() {
-		return "", fmt.Errorf("Error parsing provider ID from Registry: %s", diags.Err())
-	}
-
-	if provider.Type != typeName {
-		return "", fmt.Errorf("Registry returned provider with type %q, expected %q", provider.Type, typeName)
-	}
-
-	return provider.Namespace, nil
-}
-
 func (c *registryClient) addHeadersToRequest(req *http.Request) {
 	if c.creds != nil {
 		c.creds.PrepareRequest(req)
@@ -476,6 +411,11 @@ func (c *registryClient) addHeadersToRequest(req *http.Request) {
 }
 
 func (c *registryClient) errQueryFailed(provider addrs.Provider, err error) error {
+	if err == context.Canceled {
+		// This one has a special error type so that callers can
+		// handle it in a different way.
+		return ErrRequestCanceled{}
+	}
 	return ErrQueryFailed{
 		Provider: provider,
 		Wrapped:  err,

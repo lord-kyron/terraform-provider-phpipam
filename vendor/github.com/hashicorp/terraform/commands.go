@@ -6,9 +6,11 @@ import (
 
 	"github.com/mitchellh/cli"
 
+	"github.com/hashicorp/go-plugin"
 	svchost "github.com/hashicorp/terraform-svchost"
 	"github.com/hashicorp/terraform-svchost/auth"
 	"github.com/hashicorp/terraform-svchost/disco"
+	"github.com/hashicorp/terraform/addrs"
 	"github.com/hashicorp/terraform/command"
 	"github.com/hashicorp/terraform/command/cliconfig"
 	"github.com/hashicorp/terraform/command/webbrowser"
@@ -28,17 +30,19 @@ var PlumbingCommands map[string]struct{}
 // Ui is the cli.Ui used for communicating to the outside world.
 var Ui cli.Ui
 
-// PluginOverrides is set from wrappedMain during configuration processing
-// and then eventually passed to the "command" package to specify alternative
-// plugin locations via the legacy configuration file mechanism.
-var PluginOverrides command.PluginOverrides
-
 const (
 	ErrorPrefix  = "e:"
 	OutputPrefix = "o:"
 )
 
-func initCommands(config *cliconfig.Config, services *disco.Disco, providerSrc getproviders.Source) {
+func initCommands(
+	originalWorkingDir string,
+	config *cliconfig.Config,
+	services *disco.Disco,
+	providerSrc getproviders.Source,
+	providerDevOverrides map[addrs.Provider]getproviders.PackageLocalDir,
+	unmanagedProviders map[addrs.Provider]*plugin.ReattachConfig,
+) {
 	var inAutomation bool
 	if v := os.Getenv(runningInAutomationEnvName); v != "" {
 		inAutomation = true
@@ -62,13 +66,13 @@ func initCommands(config *cliconfig.Config, services *disco.Disco, providerSrc g
 	dataDir := os.Getenv("TF_DATA_DIR")
 
 	meta := command.Meta{
+		OriginalWorkingDir: originalWorkingDir,
+
 		Color:            true,
 		GlobalPluginDirs: globalPluginDirs(),
-		PluginOverrides:  &PluginOverrides,
 		Ui:               Ui,
 
 		Services:        services,
-		ProviderSource:  providerSrc,
 		BrowserLauncher: webbrowser.NewNativeLauncher(),
 
 		RunningInAutomation: inAutomation,
@@ -77,6 +81,10 @@ func initCommands(config *cliconfig.Config, services *disco.Disco, providerSrc g
 		OverrideDataDir:     dataDir,
 
 		ShutdownCh: makeShutdownCh(),
+
+		ProviderSource:       providerSrc,
+		ProviderDevOverrides: providerDevOverrides,
+		UnmanagedProviders:   unmanagedProviders,
 	}
 
 	// The command list is included in the terraform -help
@@ -215,6 +223,18 @@ func initCommands(config *cliconfig.Config, services *disco.Disco, providerSrc g
 			}, nil
 		},
 
+		"providers lock": func() (cli.Command, error) {
+			return &command.ProvidersLockCommand{
+				Meta: meta,
+			}, nil
+		},
+
+		"providers mirror": func() (cli.Command, error) {
+			return &command.ProvidersMirrorCommand{
+				Meta: meta,
+			}, nil
+		},
+
 		"providers schema": func() (cli.Command, error) {
 			return &command.ProvidersSchemaCommand{
 				Meta: meta,
@@ -308,7 +328,7 @@ func initCommands(config *cliconfig.Config, services *disco.Disco, providerSrc g
 		//-----------------------------------------------------------
 
 		"0.12upgrade": func() (cli.Command, error) {
-			return &command.ZeroThirteenUpgradeCommand{
+			return &command.ZeroTwelveUpgradeCommand{
 				Meta: meta,
 			}, nil
 		},
