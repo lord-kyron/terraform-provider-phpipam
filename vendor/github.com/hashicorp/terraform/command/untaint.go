@@ -1,12 +1,13 @@
 package command
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
 	"github.com/hashicorp/terraform/addrs"
+	"github.com/hashicorp/terraform/command/arguments"
 	"github.com/hashicorp/terraform/command/clistate"
+	"github.com/hashicorp/terraform/command/views"
 	"github.com/hashicorp/terraform/states"
 	"github.com/hashicorp/terraform/tfdiags"
 )
@@ -19,14 +20,12 @@ type UntaintCommand struct {
 
 func (c *UntaintCommand) Run(args []string) int {
 	args = c.Meta.process(args)
-	var module string
 	var allowMissing bool
-	cmdFlags := c.Meta.defaultFlagSet("untaint")
-	cmdFlags.BoolVar(&allowMissing, "allow-missing", false, "module")
+	cmdFlags := c.Meta.ignoreRemoteVersionFlagSet("untaint")
+	cmdFlags.BoolVar(&allowMissing, "allow-missing", false, "allow missing")
 	cmdFlags.StringVar(&c.Meta.backupPath, "backup", "", "path")
 	cmdFlags.BoolVar(&c.Meta.stateLock, "lock", true, "lock state")
 	cmdFlags.DurationVar(&c.Meta.stateLockTimeout, "lock-timeout", 0, "lock timeout")
-	cmdFlags.StringVar(&module, "module", "", "module")
 	cmdFlags.StringVar(&c.Meta.statePath, "state", "", "path")
 	cmdFlags.StringVar(&c.Meta.stateOutPath, "state-out", "", "path")
 	cmdFlags.Usage = func() { c.Ui.Error(c.Help()) }
@@ -45,11 +44,6 @@ func (c *UntaintCommand) Run(args []string) int {
 		return 1
 	}
 
-	if module != "" {
-		c.Ui.Error("The -module option is no longer used. Instead, include the module path in the main resource address, like \"module.foo.module.bar.null_resource.baz\".")
-		return 1
-	}
-
 	addr, addrDiags := addrs.ParseAbsResourceInstanceStr(args[0])
 	diags = diags.Append(addrDiags)
 	if addrDiags.HasErrors() {
@@ -65,12 +59,22 @@ func (c *UntaintCommand) Run(args []string) int {
 		return 1
 	}
 
-	// Get the state
+	// Determine the workspace name
 	workspace, err := c.Workspace()
 	if err != nil {
 		c.Ui.Error(fmt.Sprintf("Error selecting workspace: %s", err))
 		return 1
 	}
+
+	// Check remote Terraform version is compatible
+	remoteVersionDiags := c.remoteBackendVersionCheck(b, workspace)
+	diags = diags.Append(remoteVersionDiags)
+	c.showDiagnostics(diags)
+	if diags.HasErrors() {
+		return 1
+	}
+
+	// Get the state
 	stateMgr, err := b.StateMgr(workspace)
 	if err != nil {
 		c.Ui.Error(fmt.Sprintf("Failed to load state: %s", err))
@@ -78,12 +82,16 @@ func (c *UntaintCommand) Run(args []string) int {
 	}
 
 	if c.stateLock {
-		stateLocker := clistate.NewLocker(context.Background(), c.stateLockTimeout, c.Ui, c.Colorize())
-		if err := stateLocker.Lock(stateMgr, "untaint"); err != nil {
-			c.Ui.Error(fmt.Sprintf("Error locking state: %s", err))
+		stateLocker := clistate.NewLocker(c.stateLockTimeout, views.NewStateLocker(arguments.ViewHuman, c.View))
+		if diags := stateLocker.Lock(stateMgr, "untaint"); diags.HasErrors() {
+			c.showDiagnostics(diags)
 			return 1
 		}
-		defer stateLocker.Unlock(nil)
+		defer func() {
+			if diags := stateLocker.Unlock(); diags.HasErrors() {
+				c.showDiagnostics(diags)
+			}
+		}()
 	}
 
 	if err := stateMgr.RefreshState(); err != nil {
@@ -173,53 +181,56 @@ func (c *UntaintCommand) Run(args []string) int {
 
 func (c *UntaintCommand) Help() string {
 	helpText := `
-Usage: terraform untaint [options] name
+Usage: terraform [global options] untaint [options] name
 
-  Manually unmark a resource as tainted, restoring it as the primary
-  instance in the state.  This reverses either a manual 'terraform taint'
-  or the result of provisioners failing on a resource.
+  Terraform uses the term "tainted" to describe a resource instance
+  which may not be fully functional, either because its creation
+  partially failed or because you've manually marked it as such using
+  the "terraform taint" command.
 
-  This will not modify your infrastructure. This command changes your
-  state to unmark a resource as tainted.  This command can be undone by
-  reverting the state backup file that is created, or by running
-  'terraform taint' on the resource.
+  This command removes that state from a resource instance, causing
+  Terraform to see it as fully-functional and not in need of
+  replacement.
+
+  This will not modify your infrastructure directly. It only avoids
+  Terraform planning to replace a tainted instance in a future operation.
 
 Options:
 
-  -allow-missing      If specified, the command will succeed (exit code 0)
-                      even if the resource is missing.
+  -allow-missing          If specified, the command will succeed (exit code 0)
+                          even if the resource is missing.
 
-  -backup=path        Path to backup the existing state file before
-                      modifying. Defaults to the "-state-out" path with
-                      ".backup" extension. Set to "-" to disable backup.
+  -backup=path            Path to backup the existing state file before
+						  modifying. Defaults to the "-state-out" path with
+						  ".backup" extension. Set to "-" to disable backup.
 
-  -lock=true          Lock the state file when locking is supported.
+  -lock=true              Lock the state file when locking is supported.
 
-  -lock-timeout=0s    Duration to retry a state lock.
+  -lock-timeout=0s        Duration to retry a state lock.
 
-  -module=path        The module path where the resource lives. By
-                      default this will be root. Child modules can be specified
-                      by names. Ex. "consul" or "consul.vpc" (nested modules).
+  -state=path             Path to read and save state (unless state-out
+                          is specified). Defaults to "terraform.tfstate".
 
-  -state=path         Path to read and save state (unless state-out
-                      is specified). Defaults to "terraform.tfstate".
+  -state-out=path         Path to write updated state file. By default, the
+                          "-state" path will be used.
 
-  -state-out=path     Path to write updated state file. By default, the
-                      "-state" path will be used.
+  -ignore-remote-version  Continue even if remote and local Terraform versions
+                          are incompatible. This may result in an unusable
+                          workspace, and should be used with extreme caution.
 
 `
 	return strings.TrimSpace(helpText)
 }
 
 func (c *UntaintCommand) Synopsis() string {
-	return "Manually unmark a resource as tainted"
+	return "Remove the 'tainted' state from a resource instance"
 }
 
 func (c *UntaintCommand) allowMissingExit(name addrs.AbsResourceInstance) int {
 	c.showDiagnostics(tfdiags.Sourceless(
 		tfdiags.Warning,
 		"No such resource instance",
-		"Resource instance %s was not found, but this is not an error because -allow-missing was set.",
+		fmt.Sprintf("Resource instance %s was not found, but this is not an error because -allow-missing was set.", name),
 	))
 	return 0
 }

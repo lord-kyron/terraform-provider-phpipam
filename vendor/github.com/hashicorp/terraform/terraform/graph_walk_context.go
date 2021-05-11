@@ -25,6 +25,7 @@ type ContextGraphWalker struct {
 	Context            *Context
 	State              *states.SyncState   // Used for safe concurrent access to state
 	RefreshState       *states.SyncState   // Used for safe concurrent access to state
+	PrevRunState       *states.SyncState   // Used for safe concurrent access to state
 	Changes            *plans.ChangesSync  // Used for safe concurrent writes to changes
 	InstanceExpander   *instances.Expander // Tracks our gradual expansion of module and resource instances
 	Operation          walkOperation
@@ -35,7 +36,6 @@ type ContextGraphWalker struct {
 	// is in progress.
 	NonFatalDiagnostics tfdiags.Diagnostics
 
-	errorLock          sync.Mutex
 	once               sync.Once
 	contexts           map[string]*BuiltinEvalContext
 	contextLock        sync.Mutex
@@ -96,6 +96,7 @@ func (w *ContextGraphWalker) EvalContext() EvalContext {
 		ChangesValue:          w.Changes,
 		StateValue:            w.State,
 		RefreshStateValue:     w.RefreshState,
+		PrevRunStateValue:     w.PrevRunState,
 		Evaluator:             evaluator,
 		VariableValues:        w.variableValues,
 		VariableValuesLock:    &w.variableValuesLock,
@@ -123,39 +124,7 @@ func (w *ContextGraphWalker) init() {
 func (w *ContextGraphWalker) Execute(ctx EvalContext, n GraphNodeExecutable) tfdiags.Diagnostics {
 	// Acquire a lock on the semaphore
 	w.Context.parallelSem.Acquire()
+	defer w.Context.parallelSem.Release()
 
-	err := n.Execute(ctx, w.Operation)
-
-	// Release the semaphore
-	w.Context.parallelSem.Release()
-
-	if err == nil {
-		return nil
-	}
-
-	// Acquire the lock because anything is going to require a lock.
-	w.errorLock.Lock()
-	defer w.errorLock.Unlock()
-
-	// If the error is non-fatal then we'll accumulate its diagnostics in our
-	// non-fatal list, rather than returning it directly, so that the graph
-	// walk can continue.
-	if nferr, ok := err.(tfdiags.NonFatalError); ok {
-		w.NonFatalDiagnostics = w.NonFatalDiagnostics.Append(nferr.Diagnostics)
-		return nil
-	}
-
-	//  If we early exit, it isn't an error.
-	if _, isEarlyExit := err.(EvalEarlyExitError); isEarlyExit {
-		return nil
-	}
-
-	// Otherwise, we'll let our usual diagnostics machinery figure out how to
-	// unpack this as one or more diagnostic messages and return that. If we
-	// get down here then the returned diagnostics will contain at least one
-	// error, causing the graph walk to halt.
-	var diags tfdiags.Diagnostics
-	diags = diags.Append(err)
-	return diags
-
+	return n.Execute(ctx, w.Operation)
 }

@@ -77,22 +77,16 @@ type EvalContext interface {
 	ProviderInput(addrs.AbsProviderConfig) map[string]cty.Value
 	SetProviderInput(addrs.AbsProviderConfig, map[string]cty.Value)
 
-	// InitProvisioner initializes the provisioner with the given name.
-	// It is an error to initialize the same provisioner more than once.
-	InitProvisioner(string) error
-
-	// Provisioner gets the provisioner instance with the given name (already
-	// initialized) or returns nil if the provisioner isn't initialized.
-	Provisioner(string) provisioners.Interface
+	// Provisioner gets the provisioner instance with the given name.
+	Provisioner(string) (provisioners.Interface, error)
 
 	// ProvisionerSchema retrieves the main configuration schema for a
 	// particular provisioner, which must have already been initialized with
 	// InitProvisioner.
 	ProvisionerSchema(string) *configschema.Block
 
-	// CloseProvisioner closes provisioner connections that aren't needed
-	// anymore.
-	CloseProvisioner(string) error
+	// CloseProvisioner closes all provisioner plugins.
+	CloseProvisioners() error
 
 	// EvaluateBlock takes the given raw configuration block and associated
 	// schema and evaluates it to produce a value of an object type that
@@ -156,6 +150,12 @@ type EvalContext interface {
 	// access to the state used to store the most recently refreshed resource
 	// values.
 	RefreshState() *states.SyncState
+
+	// PrevRunState returns a wrapper object that provides safe concurrent
+	// access to the state which represents the result of the previous run,
+	// updated only so that object data conforms to current schemas for
+	// meaningful comparison with RefreshState.
+	PrevRunState() *states.SyncState
 
 	// InstanceExpander returns a helper object for tracking the expansion of
 	// graph nodes during the plan phase in response to "count" and "for_each"

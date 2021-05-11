@@ -40,6 +40,12 @@ type ApplyGraphBuilder struct {
 	// outputs should go into the diff so that this is unnecessary.
 	Targets []addrs.Targetable
 
+	// ForceReplace are the resource instance addresses that the user
+	// requested to force replacement for when creating the plan, if any.
+	// The apply step refers to these as part of verifying that the planned
+	// actions remain consistent between plan and apply.
+	ForceReplace []addrs.AbsResourceInstance
+
 	// Validate will do structural validation of the graph.
 	Validate bool
 }
@@ -71,6 +77,7 @@ func (b *ApplyGraphBuilder) Steps() []GraphTransformer {
 	concreteResourceInstance := func(a *NodeAbstractResourceInstance) dag.Vertex {
 		return &NodeApplyableResourceInstance{
 			NodeAbstractResourceInstance: a,
+			forceReplace:                 b.ForceReplace,
 		}
 	}
 
@@ -107,10 +114,6 @@ func (b *ApplyGraphBuilder) Steps() []GraphTransformer {
 
 		// Attach the configuration to any resources
 		&AttachResourceConfigTransformer{Config: b.Config},
-
-		// Provisioner-related transformations
-		&MissingProvisionerTransformer{Provisioners: b.Components.ResourceProvisioners()},
-		&ProvisionerTransformer{},
 
 		// add providers
 		TransformProviders(b.Components.ResourceProviders(), concreteProvider, b.Config),
@@ -162,7 +165,6 @@ func (b *ApplyGraphBuilder) Steps() []GraphTransformer {
 
 		// Close opened plugin connections
 		&CloseProviderTransformer{},
-		&CloseProvisionerTransformer{},
 
 		// close the root module
 		&CloseRootModuleTransformer{},

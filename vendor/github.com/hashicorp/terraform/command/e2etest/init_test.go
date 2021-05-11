@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/hashicorp/terraform/e2e"
 )
 
@@ -256,17 +258,9 @@ func TestInitProviders_pluginCache(t *testing.T) {
 	// convert the slashes if building for windows.
 	p := filepath.FromSlash("./cache")
 	cmd.Env = append(cmd.Env, "TF_PLUGIN_CACHE_DIR="+p)
-	cmd.Stdin = nil
-	cmd.Stderr = &bytes.Buffer{}
-
 	err = cmd.Run()
 	if err != nil {
 		t.Errorf("unexpected error: %s", err)
-	}
-
-	stderr := cmd.Stderr.(*bytes.Buffer).String()
-	if stderr != "" {
-		t.Errorf("unexpected stderr output:\n%s\n", stderr)
 	}
 
 	path := filepath.FromSlash(fmt.Sprintf(".terraform/providers/registry.terraform.io/hashicorp/template/2.1.0/%s_%s/terraform-provider-template_v2.1.0_x4", runtime.GOOS, runtime.GOARCH))
@@ -341,13 +335,17 @@ func TestInitProviderNotFound(t *testing.T) {
 	defer tf.Close()
 
 	t.Run("registry provider not found", func(t *testing.T) {
-		_, stderr, err := tf.Run("init")
+		_, stderr, err := tf.Run("init", "-no-color")
 		if err == nil {
 			t.Fatal("expected error, got success")
 		}
 
 		oneLineStderr := strings.ReplaceAll(stderr, "\n", " ")
 		if !strings.Contains(oneLineStderr, "provider registry registry.terraform.io does not have a provider named registry.terraform.io/hashicorp/nonexist") {
+			t.Errorf("expected error message is missing from output:\n%s", stderr)
+		}
+
+		if !strings.Contains(oneLineStderr, "All modules should specify their required_providers") {
 			t.Errorf("expected error message is missing from output:\n%s", stderr)
 		}
 	})
@@ -359,13 +357,39 @@ func TestInitProviderNotFound(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		_, stderr, err := tf.Run("init", "-plugin-dir="+pluginDir)
+		_, stderr, err := tf.Run("init", "-no-color", "-plugin-dir="+pluginDir)
 		if err == nil {
 			t.Fatal("expected error, got success")
 		}
 
 		if !strings.Contains(stderr, "provider registry.terraform.io/hashicorp/nonexist was not\nfound in any of the search locations\n\n  - "+pluginDir) {
 			t.Errorf("expected error message is missing from output:\n%s", stderr)
+		}
+	})
+
+	t.Run("special characters enabled", func(t *testing.T) {
+		_, stderr, err := tf.Run("init")
+		if err == nil {
+			t.Fatal("expected error, got success")
+		}
+
+		expectedErr := `╷
+│ Error: Failed to query available provider packages
+│` + ` ` + `
+│ Could not retrieve the list of available versions for provider
+│ hashicorp/nonexist: provider registry registry.terraform.io does not have a
+│ provider named registry.terraform.io/hashicorp/nonexist
+│ 
+│ All modules should specify their required_providers so that external
+│ consumers will get the correct providers when using a module. To see which
+│ modules are currently depending on hashicorp/nonexist, run the following
+│ command:
+│     terraform providers
+╵
+
+`
+		if stripAnsi(stderr) != expectedErr {
+			t.Errorf("wrong output:\n%s", cmp.Diff(stripAnsi(stderr), expectedErr))
 		}
 	})
 }
@@ -386,7 +410,7 @@ func TestInitProviderWarnings(t *testing.T) {
 		t.Fatal("expected error, got success")
 	}
 
-	if !strings.Contains(stdout, "This provider is archived and no longer needed. The terraform_remote_state\ndata source is built into the latest Terraform release.") {
+	if !strings.Contains(stdout, "This provider is archived and no longer needed.") {
 		t.Errorf("expected warning message is missing from output:\n%s", stdout)
 	}
 

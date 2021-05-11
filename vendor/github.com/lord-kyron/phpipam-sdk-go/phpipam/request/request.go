@@ -3,12 +3,14 @@ package request
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
 
-	"github.com/lord-kyron/phpipam-sdk-go/phpipam/session"
+	"github.com/pavel-z1/phpipam-sdk-go/phpipam/session"
 )
 
 // APIResponse represents a PHPIPAM response body. Both successful and
@@ -114,6 +116,7 @@ func newRequestResponse(r *http.Response) *requestResponse {
 	}
 	defer r.Body.Close()
 	body, err := ioutil.ReadAll(r.Body)
+	log.Printf("Response Body Debug ................... %s", body)
 	if err != nil {
 		panic(err)
 	}
@@ -129,7 +132,11 @@ func newRequestResponse(r *http.Response) *requestResponse {
 func (r *Request) Send() error {
 	var req *http.Request
 	var err error
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: r.Session.Config.Insecure},
+	}
 	client := &http.Client{
+		Transport: tr,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
@@ -138,10 +145,12 @@ func (r *Request) Send() error {
 	switch r.Method {
 	case "OPTIONS", "GET", "POST", "PUT", "PATCH", "DELETE":
 		bs, err := json.Marshal(r.Input)
+		log.Printf("Request Body Debug ................... %s", bs)
 		if err != nil {
 			return fmt.Errorf("Error preparing request data: %s", err)
 		}
 		buf := bytes.NewBuffer(bs)
+		log.Printf("Request URL Debug ...................Method: %s, UR: %s/%s%s", r.Method, r.Session.Config.Endpoint, r.Session.Config.AppID, r.URI)
 		req, err = http.NewRequest(r.Method, fmt.Sprintf("%s/%s%s", r.Session.Config.Endpoint, r.Session.Config.AppID, r.URI), buf)
 		req.Header.Add("Content-Type", "application/json")
 	default:

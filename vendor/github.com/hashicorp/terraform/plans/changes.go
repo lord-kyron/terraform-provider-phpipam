@@ -39,7 +39,7 @@ func (c *Changes) Empty() bool {
 	}
 
 	for _, out := range c.Outputs {
-		if out.Action != NoOp {
+		if out.Addr.Module.IsRoot() && out.Action != NoOp {
 			return false
 		}
 	}
@@ -51,9 +51,8 @@ func (c *Changes) Empty() bool {
 // resource instance of the given address, if any. Returns nil if no change is
 // planned.
 func (c *Changes) ResourceInstance(addr addrs.AbsResourceInstance) *ResourceInstanceChangeSrc {
-	addrStr := addr.String()
 	for _, rc := range c.Resources {
-		if rc.Addr.String() == addrStr && rc.DeposedKey == states.NotDeposed {
+		if rc.Addr.Equal(addr) && rc.DeposedKey == states.NotDeposed {
 			return rc
 		}
 	}
@@ -81,9 +80,8 @@ func (c *Changes) InstancesForConfigResource(addr addrs.ConfigResource) []*Resou
 // the resource instance of the given address, if any. Returns nil if no change
 // is planned.
 func (c *Changes) ResourceInstanceDeposed(addr addrs.AbsResourceInstance, key states.DeposedKey) *ResourceInstanceChangeSrc {
-	addrStr := addr.String()
 	for _, rc := range c.Resources {
-		if rc.Addr.String() == addrStr && rc.DeposedKey == key {
+		if rc.Addr.Equal(addr) && rc.DeposedKey == key {
 			return rc
 		}
 	}
@@ -94,9 +92,8 @@ func (c *Changes) ResourceInstanceDeposed(addr addrs.AbsResourceInstance, key st
 // OutputValue returns the planned change for the output value with the
 //  given address, if any. Returns nil if no change is planned.
 func (c *Changes) OutputValue(addr addrs.AbsOutputValue) *OutputChangeSrc {
-	addrStr := addr.String()
 	for _, oc := range c.Outputs {
-		if oc.Addr.String() == addrStr {
+		if oc.Addr.Equal(addr) {
 			return oc
 		}
 	}
@@ -168,6 +165,22 @@ type ResourceInstanceChange struct {
 	// Change is an embedded description of the change.
 	Change
 
+	// ActionReason is an optional extra indication of why we chose the
+	// action recorded in Change.Action for this particular resource instance.
+	//
+	// This is an approximate mechanism only for the purpose of explaining the
+	// plan to end-users in the UI and is not to be used for any
+	// decision-making during the apply step; if apply behavior needs to vary
+	// depending on the "action reason" then the information for that decision
+	// must be recorded more precisely elsewhere for that purpose.
+	//
+	// Sometimes there might be more than one reason for choosing a particular
+	// action. In that case, it's up to the codepath making that decision to
+	// decide which value would provide the most relevant explanation to the
+	// end-user and return that. It's not a goal of this field to represent
+	// fine details about the planning process.
+	ActionReason ResourceInstanceChangeActionReason
+
 	// RequiredReplace is a set of paths that caused the change action to be
 	// Replace rather than Update. Always nil if the change action is not
 	// Replace.
@@ -195,6 +208,7 @@ func (rc *ResourceInstanceChange) Encode(ty cty.Type) (*ResourceInstanceChangeSr
 		DeposedKey:      rc.DeposedKey,
 		ProviderAddr:    rc.ProviderAddr,
 		ChangeSrc:       *cs,
+		ActionReason:    rc.ActionReason,
 		RequiredReplace: rc.RequiredReplace,
 		Private:         rc.Private,
 	}, err
@@ -279,6 +293,43 @@ func (rc *ResourceInstanceChange) Simplify(destroying bool) *ResourceInstanceCha
 	// If we fall out here then our change is already simple enough.
 	return rc
 }
+
+// ResourceInstanceChangeActionReason allows for some extra user-facing
+// reasoning for why a particular change action was chosen for a particular
+// resource instance.
+//
+// This only represents sufficient detail to give a suitable explanation to
+// an end-user, and mustn't be used for any real decision-making during the
+// apply step.
+type ResourceInstanceChangeActionReason rune
+
+//go:generate go run golang.org/x/tools/cmd/stringer -type=ResourceInstanceChangeActionReason changes.go
+
+const (
+	// In most cases there's no special reason for choosing a particular
+	// action, which is represented by ResourceInstanceChangeNoReason.
+	ResourceInstanceChangeNoReason ResourceInstanceChangeActionReason = 0
+
+	// ResourceInstanceReplaceBecauseTainted indicates that the resource
+	// instance must be replaced because its existing current object is
+	// marked as "tainted".
+	ResourceInstanceReplaceBecauseTainted ResourceInstanceChangeActionReason = 'T'
+
+	// ResourceInstanceReplaceByRequest indicates that the resource instance
+	// is planned to be replaced because a caller specifically asked for it
+	// to be using ReplaceAddrs. (On the command line, the -replace=...
+	// planning option.)
+	ResourceInstanceReplaceByRequest ResourceInstanceChangeActionReason = 'R'
+
+	// ResourceInstanceReplaceBecauseCannotUpdate indicates that the resource
+	// instance is planned to be replaced because the provider has indicated
+	// that a requested change cannot be applied as an update.
+	//
+	// In this case, the RequiredReplace field will typically be populated on
+	// the ResourceInstanceChange object to give information about specifically
+	// which arguments changed in a non-updatable way.
+	ResourceInstanceReplaceBecauseCannotUpdate ResourceInstanceChangeActionReason = 'F'
+)
 
 // OutputChange describes a change to an output value.
 type OutputChange struct {

@@ -1,9 +1,11 @@
 package jsonplan
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/zclconf/go-cty/cty"
 )
 
@@ -260,5 +262,258 @@ func TestUnknownAsBool(t *testing.T) {
 				test.Input, got, test.Want,
 			)
 		}
+	}
+}
+
+func TestSensitiveAsBool(t *testing.T) {
+	sensitive := "sensitive"
+	tests := []struct {
+		Input cty.Value
+		Want  cty.Value
+	}{
+		{
+			cty.StringVal("hello"),
+			cty.False,
+		},
+		{
+			cty.NullVal(cty.String),
+			cty.False,
+		},
+		{
+			cty.StringVal("hello").Mark(sensitive),
+			cty.True,
+		},
+		{
+			cty.NullVal(cty.String).Mark(sensitive),
+			cty.True,
+		},
+
+		{
+			cty.NullVal(cty.DynamicPseudoType).Mark(sensitive),
+			cty.True,
+		},
+		{
+			cty.NullVal(cty.Object(map[string]cty.Type{"test": cty.String})),
+			cty.False,
+		},
+		{
+			cty.NullVal(cty.Object(map[string]cty.Type{"test": cty.String})).Mark(sensitive),
+			cty.True,
+		},
+		{
+			cty.DynamicVal,
+			cty.False,
+		},
+		{
+			cty.DynamicVal.Mark(sensitive),
+			cty.True,
+		},
+
+		{
+			cty.ListValEmpty(cty.String),
+			cty.EmptyTupleVal,
+		},
+		{
+			cty.ListValEmpty(cty.String).Mark(sensitive),
+			cty.True,
+		},
+		{
+			cty.ListVal([]cty.Value{
+				cty.StringVal("hello"),
+				cty.StringVal("friend").Mark(sensitive),
+			}),
+			cty.TupleVal([]cty.Value{
+				cty.False,
+				cty.True,
+			}),
+		},
+		{
+			cty.SetValEmpty(cty.String),
+			cty.EmptyTupleVal,
+		},
+		{
+			cty.SetValEmpty(cty.String).Mark(sensitive),
+			cty.True,
+		},
+		{
+			cty.SetVal([]cty.Value{cty.StringVal("hello")}),
+			cty.TupleVal([]cty.Value{cty.False}),
+		},
+		{
+			cty.SetVal([]cty.Value{cty.StringVal("hello").Mark(sensitive)}),
+			cty.True,
+		},
+		{
+			cty.EmptyTupleVal.Mark(sensitive),
+			cty.True,
+		},
+		{
+			cty.TupleVal([]cty.Value{
+				cty.StringVal("hello"),
+				cty.StringVal("friend").Mark(sensitive),
+			}),
+			cty.TupleVal([]cty.Value{
+				cty.False,
+				cty.True,
+			}),
+		},
+		{
+			cty.MapValEmpty(cty.String),
+			cty.EmptyObjectVal,
+		},
+		{
+			cty.MapValEmpty(cty.String).Mark(sensitive),
+			cty.True,
+		},
+		{
+			cty.MapVal(map[string]cty.Value{
+				"greeting": cty.StringVal("hello"),
+				"animal":   cty.StringVal("horse"),
+			}),
+			cty.EmptyObjectVal,
+		},
+		{
+			cty.MapVal(map[string]cty.Value{
+				"greeting": cty.StringVal("hello"),
+				"animal":   cty.StringVal("horse").Mark(sensitive),
+			}),
+			cty.ObjectVal(map[string]cty.Value{
+				"animal": cty.True,
+			}),
+		},
+		{
+			cty.MapVal(map[string]cty.Value{
+				"greeting": cty.StringVal("hello"),
+				"animal":   cty.StringVal("horse").Mark(sensitive),
+			}).Mark(sensitive),
+			cty.True,
+		},
+		{
+			cty.EmptyObjectVal,
+			cty.EmptyObjectVal,
+		},
+		{
+			cty.ObjectVal(map[string]cty.Value{
+				"greeting": cty.StringVal("hello"),
+				"animal":   cty.StringVal("horse"),
+			}),
+			cty.EmptyObjectVal,
+		},
+		{
+			cty.ObjectVal(map[string]cty.Value{
+				"greeting": cty.StringVal("hello"),
+				"animal":   cty.StringVal("horse").Mark(sensitive),
+			}),
+			cty.ObjectVal(map[string]cty.Value{
+				"animal": cty.True,
+			}),
+		},
+		{
+			cty.ObjectVal(map[string]cty.Value{
+				"greeting": cty.StringVal("hello"),
+				"animal":   cty.StringVal("horse").Mark(sensitive),
+			}).Mark(sensitive),
+			cty.True,
+		},
+		{
+			cty.ListVal([]cty.Value{
+				cty.ObjectVal(map[string]cty.Value{
+					"a": cty.UnknownVal(cty.String),
+				}),
+				cty.ObjectVal(map[string]cty.Value{
+					"a": cty.StringVal("known").Mark(sensitive),
+				}),
+			}),
+			cty.TupleVal([]cty.Value{
+				cty.EmptyObjectVal,
+				cty.ObjectVal(map[string]cty.Value{
+					"a": cty.True,
+				}),
+			}),
+		},
+		{
+			cty.ListVal([]cty.Value{
+				cty.MapValEmpty(cty.String),
+				cty.MapVal(map[string]cty.Value{
+					"a": cty.StringVal("known").Mark(sensitive),
+				}),
+				cty.MapVal(map[string]cty.Value{
+					"a": cty.UnknownVal(cty.String),
+				}),
+			}),
+			cty.TupleVal([]cty.Value{
+				cty.EmptyObjectVal,
+				cty.ObjectVal(map[string]cty.Value{
+					"a": cty.True,
+				}),
+				cty.EmptyObjectVal,
+			}),
+		},
+		{
+			cty.ObjectVal(map[string]cty.Value{
+				"list":   cty.UnknownVal(cty.List(cty.String)),
+				"set":    cty.UnknownVal(cty.Set(cty.Bool)),
+				"tuple":  cty.UnknownVal(cty.Tuple([]cty.Type{cty.String, cty.Number})),
+				"map":    cty.UnknownVal(cty.Map(cty.String)),
+				"object": cty.UnknownVal(cty.Object(map[string]cty.Type{"a": cty.String})),
+			}),
+			cty.ObjectVal(map[string]cty.Value{
+				"list":   cty.EmptyTupleVal,
+				"set":    cty.EmptyTupleVal,
+				"tuple":  cty.EmptyTupleVal,
+				"map":    cty.EmptyObjectVal,
+				"object": cty.EmptyObjectVal,
+			}),
+		},
+	}
+
+	for _, test := range tests {
+		got := sensitiveAsBool(test.Input)
+		if !reflect.DeepEqual(got, test.Want) {
+			t.Errorf(
+				"wrong result\ninput: %#v\ngot:   %#v\nwant:  %#v",
+				test.Input, got, test.Want,
+			)
+		}
+	}
+}
+
+func TestEncodePaths(t *testing.T) {
+	tests := map[string]struct {
+		Input cty.PathSet
+		Want  json.RawMessage
+	}{
+		"empty set": {
+			cty.NewPathSet(),
+			json.RawMessage(nil),
+		},
+		"index path with string and int steps": {
+			cty.NewPathSet(cty.IndexStringPath("boop").IndexInt(0)),
+			json.RawMessage(`[["boop",0]]`),
+		},
+		"get attr path with one step": {
+			cty.NewPathSet(cty.GetAttrPath("triggers")),
+			json.RawMessage(`[["triggers"]]`),
+		},
+		"multiple paths of different types": {
+			cty.NewPathSet(
+				cty.GetAttrPath("alpha").GetAttr("beta").GetAttr("gamma"),
+				cty.GetAttrPath("triggers").IndexString("name"),
+				cty.IndexIntPath(0).IndexInt(1).IndexInt(2).IndexInt(3),
+			),
+			json.RawMessage(`[["alpha","beta","gamma"],["triggers","name"],[0,1,2,3]]`),
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			got, err := encodePaths(test.Input)
+			if err != nil {
+				t.Fatalf("unexpected error: %s", err)
+			}
+			if !cmp.Equal(got, test.Want) {
+				t.Errorf("wrong result:\n %v\n", cmp.Diff(got, test.Want))
+			}
+		})
 	}
 }

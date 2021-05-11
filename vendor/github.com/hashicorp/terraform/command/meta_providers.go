@@ -15,8 +15,10 @@ import (
 	terraformProvider "github.com/hashicorp/terraform/builtin/providers/terraform"
 	"github.com/hashicorp/terraform/internal/getproviders"
 	"github.com/hashicorp/terraform/internal/logging"
+	"github.com/hashicorp/terraform/internal/moduletest"
 	"github.com/hashicorp/terraform/internal/providercache"
 	tfplugin "github.com/hashicorp/terraform/plugin"
+	tfplugin6 "github.com/hashicorp/terraform/plugin6"
 	"github.com/hashicorp/terraform/providers"
 	"github.com/hashicorp/terraform/tfdiags"
 )
@@ -128,31 +130,6 @@ func (m *Meta) providerGlobalCacheDir() *providercache.Dir {
 	return providercache.NewDir(dir)
 }
 
-// providerLegacyCacheDir returns an object representing the former location
-// of the local cache directory from Terraform 0.13 and earlier.
-//
-// This is no longer viable for use as a real cache directory because some
-// incorrect documentation called for Terraform Cloud users to use it as if it
-// were an implied local filesystem mirror directory. Therefore we now use it
-// only to generate some hopefully-helpful migration guidance during
-// "terraform init" for anyone who _was_ trying to use it as a local filesystem
-// mirror directory.
-//
-// providerLegacyCacheDir returns nil if the legacy cache directory isn't
-// present or isn't a directory, so that callers can more easily skip over
-// any backward compatibility behavior that applies only when the directory
-// is present.
-//
-// Callers must use the resulting object in a read-only mode only. Don't
-// install any new providers into this directory.
-func (m *Meta) providerLegacyCacheDir() *providercache.Dir {
-	dir := filepath.Join(m.DataDir(), "plugins")
-	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-		return nil
-	}
-	return providercache.NewDir(dir)
-}
-
 // providerInstallSource returns an object that knows how to consult one or
 // more external sources to determine the availability of and package
 // locations for versions of Terraform providers that are available for
@@ -177,8 +154,35 @@ func (m *Meta) providerInstallSource() getproviders.Source {
 	return m.ProviderSource
 }
 
-// providerDevOverrideWarnings returns a diagnostics that contains at least
-// one warning if and only if there is at least one provider development
+// providerDevOverrideInitWarnings returns a diagnostics that contains at
+// least one warning if and only if there is at least one provider development
+// override in effect. If not, the result is always empty. The result never
+// contains error diagnostics.
+//
+// The init command can use this to include a warning that the results
+// may differ from what's expected due to the development overrides. For
+// other commands, providerDevOverrideRuntimeWarnings should be used.
+func (m *Meta) providerDevOverrideInitWarnings() tfdiags.Diagnostics {
+	if len(m.ProviderDevOverrides) == 0 {
+		return nil
+	}
+	var detailMsg strings.Builder
+	detailMsg.WriteString("The following provider development overrides are set in the CLI configuration:\n")
+	for addr, path := range m.ProviderDevOverrides {
+		detailMsg.WriteString(fmt.Sprintf(" - %s in %s\n", addr.ForDisplay(), path))
+	}
+	detailMsg.WriteString("\nSkip terraform init when using provider development overrides. It is not necessary and may error unexpectedly.")
+	return tfdiags.Diagnostics{
+		tfdiags.Sourceless(
+			tfdiags.Warning,
+			"Provider development overrides are in effect",
+			detailMsg.String(),
+		),
+	}
+}
+
+// providerDevOverrideRuntimeWarnings returns a diagnostics that contains at
+// least one warning if and only if there is at least one provider development
 // override in effect. If not, the result is always empty. The result never
 // contains error diagnostics.
 //
@@ -187,7 +191,10 @@ func (m *Meta) providerInstallSource() getproviders.Source {
 // not necessary to bother the user with this warning on every command, but
 // it's helpful to return it on commands that have externally-visible side
 // effects and on commands that are used to verify conformance to schemas.
-func (m *Meta) providerDevOverrideWarnings() tfdiags.Diagnostics {
+//
+// See providerDevOverrideInitWarnings for warnings specific to the init
+// command.
+func (m *Meta) providerDevOverrideRuntimeWarnings() tfdiags.Diagnostics {
 	if len(m.ProviderDevOverrides) == 0 {
 		return nil
 	}
@@ -320,6 +327,9 @@ func (m *Meta) internalProviders() map[string]providers.Factory {
 		"terraform": func() (providers.Interface, error) {
 			return terraformProvider.NewProvider(), nil
 		},
+		"test": func() (providers.Interface, error) {
+			return moduletest.NewProvider(), nil
+		},
 	}
 }
 
@@ -335,7 +345,7 @@ func providerFactory(meta *providercache.CachedProvider) providers.Factory {
 
 		config := &plugin.ClientConfig{
 			HandshakeConfig:  tfplugin.Handshake,
-			Logger:           logging.NewHCLogger("plugin"),
+			Logger:           logging.NewProviderLogger(""),
 			AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
 			Managed:          true,
 			Cmd:              exec.Command(execFile),
@@ -355,10 +365,19 @@ func providerFactory(meta *providercache.CachedProvider) providers.Factory {
 		}
 
 		// store the client so that the plugin can kill the child process
-		p := raw.(*tfplugin.GRPCProvider)
-		p.PluginClient = client
-
-		return p, nil
+		protoVer := client.NegotiatedVersion()
+		switch protoVer {
+		case 5:
+			p := raw.(*tfplugin.GRPCProvider)
+			p.PluginClient = client
+			return p, nil
+		case 6:
+			p := raw.(*tfplugin6.GRPCProvider)
+			p.PluginClient = client
+			return p, nil
+		default:
+			panic("unsupported protocol version")
+		}
 	}
 }
 
@@ -383,7 +402,7 @@ func unmanagedProviderFactory(provider addrs.Provider, reattach *plugin.Reattach
 
 		config := &plugin.ClientConfig{
 			HandshakeConfig:  tfplugin.Handshake,
-			Logger:           logging.NewHCLogger("unmanaged-plugin"),
+			Logger:           logging.NewProviderLogger("unmanaged."),
 			AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
 			Managed:          false,
 			Reattach:         reattach,

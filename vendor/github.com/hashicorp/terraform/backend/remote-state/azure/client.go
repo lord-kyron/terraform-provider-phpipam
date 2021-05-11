@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 
 	"github.com/hashicorp/go-multierror"
 	"github.com/hashicorp/go-uuid"
@@ -39,7 +40,7 @@ func (c *RemoteClient) Get() (*remote.Payload, error) {
 	ctx := context.TODO()
 	blob, err := c.giovanniBlobClient.Get(ctx, c.accountName, c.containerName, c.keyName, options)
 	if err != nil {
-		if blob.Response.StatusCode == 404 {
+		if blob.Response.IsHTTPStatus(http.StatusNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -109,7 +110,7 @@ func (c *RemoteClient) Delete() error {
 	ctx := context.TODO()
 	resp, err := c.giovanniBlobClient.Delete(ctx, c.accountName, c.containerName, c.keyName, options)
 	if err != nil {
-		if resp.Response.StatusCode != 404 {
+		if !resp.IsHTTPStatus(http.StatusNotFound) {
 			return err
 		}
 	}
@@ -151,7 +152,7 @@ func (c *RemoteClient) Lock(info *statemgr.LockInfo) (string, error) {
 	properties, err := c.giovanniBlobClient.GetProperties(ctx, c.accountName, c.containerName, c.keyName, blobs.GetPropertiesInput{})
 	if err != nil {
 		// error if we had issues getting the blob
-		if properties.Response.StatusCode != 404 {
+		if !properties.Response.IsHTTPStatus(http.StatusNotFound) {
 			return "", getLockInfoErr(err)
 		}
 		// if we don't find the blob, we need to build it

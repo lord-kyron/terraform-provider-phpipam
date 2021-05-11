@@ -1,4 +1,4 @@
-# Terraform PHPIPAM provider - version 1.2.7
+# Terraform PHPIPAM provider - version 1.2.8
 # ATTENTION!!!
 This repository is based on the original work of github user paybyphone.
 However, the version of the provider in this repo is updated and revised to support working with Terraform 12.x+
@@ -33,7 +33,7 @@ into your config. Check the [releases page][6] of this repo to get releases for
 Linux, OS X, and Windows.
 
 [5]: https://www.terraform.io/docs/plugins/basics.html
-[6]: https://github.com/lord-kyron/terraform-provider-phpipam-0.3.1/releases
+[6]: https://github.com/lord-kyron/terraform-provider-phpipam/releases
 
 Examle for CentOS 7:
 Build from repo:
@@ -1271,4 +1271,4 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ```
-# terraform-provider-phpipam-1.2.7
+# terraform-provider-phpipam-1.2.8

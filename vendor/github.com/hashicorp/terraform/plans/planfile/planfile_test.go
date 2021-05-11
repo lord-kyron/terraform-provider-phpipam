@@ -3,10 +3,9 @@ package planfile
 import (
 	"io/ioutil"
 	"path/filepath"
-	"reflect"
 	"testing"
 
-	"github.com/davecgh/go-spew/spew"
+	"github.com/google/go-cmp/cmp"
 
 	"github.com/hashicorp/terraform/configs/configload"
 	"github.com/hashicorp/terraform/plans"
@@ -34,6 +33,12 @@ func TestRoundtrip(t *testing.T) {
 	// serialization is already tested in its own package.
 	stateFileIn := &statefile.File{
 		TerraformVersion: tfversion.SemVer,
+		Serial:           2,
+		Lineage:          "abc123",
+		State:            states.NewState(),
+	}
+	prevStateFileIn := &statefile.File{
+		TerraformVersion: tfversion.SemVer,
 		Serial:           1,
 		Lineage:          "abc123",
 		State:            states.NewState(),
@@ -55,6 +60,15 @@ func TestRoundtrip(t *testing.T) {
 			Config:    plans.DynamicValue([]byte("config placeholder")),
 			Workspace: "default",
 		},
+
+		// Due to some historical oddities in how we've changed modelling over
+		// time, we also include the states (without the corresponding file
+		// headers) in the plans.Plan object. This is currently ignored by
+		// Create but will be returned by ReadPlan and so we need to include
+		// it here so that we'll get a match when we compare input and output
+		// below.
+		PrevRunState: prevStateFileIn.State,
+		PriorState:   stateFileIn.State,
 	}
 
 	workDir, err := ioutil.TempDir("", "tf-planfile")
@@ -63,7 +77,7 @@ func TestRoundtrip(t *testing.T) {
 	}
 	planFn := filepath.Join(workDir, "tfplan")
 
-	err = Create(planFn, snapIn, stateFileIn, planIn)
+	err = Create(planFn, snapIn, prevStateFileIn, stateFileIn, planIn)
 	if err != nil {
 		t.Fatalf("failed to create plan file: %s", err)
 	}
@@ -78,8 +92,8 @@ func TestRoundtrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to read plan: %s", err)
 		}
-		if !reflect.DeepEqual(planIn, planOut) {
-			t.Errorf("plan did not survive round-trip\nresult: %sinput: %s", spew.Sdump(planOut), spew.Sdump(planIn))
+		if diff := cmp.Diff(planIn, planOut); diff != "" {
+			t.Errorf("plan did not survive round-trip\n%s", diff)
 		}
 	})
 
@@ -88,8 +102,18 @@ func TestRoundtrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to read state: %s", err)
 		}
-		if !reflect.DeepEqual(stateFileIn, stateFileOut) {
-			t.Errorf("state file did not survive round-trip\nresult: %sinput: %s", spew.Sdump(stateFileOut), spew.Sdump(stateFileIn))
+		if diff := cmp.Diff(stateFileIn, stateFileOut); diff != "" {
+			t.Errorf("state file did not survive round-trip\n%s", diff)
+		}
+	})
+
+	t.Run("ReadPrevStateFile", func(t *testing.T) {
+		prevStateFileOut, err := pr.ReadPrevStateFile()
+		if err != nil {
+			t.Fatalf("failed to read state: %s", err)
+		}
+		if diff := cmp.Diff(prevStateFileIn, prevStateFileOut); diff != "" {
+			t.Errorf("state file did not survive round-trip\n%s", diff)
 		}
 	})
 
@@ -98,8 +122,8 @@ func TestRoundtrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to read config snapshot: %s", err)
 		}
-		if !reflect.DeepEqual(snapIn, snapOut) {
-			t.Errorf("config snapshot did not survive round-trip\nresult: %sinput: %s", spew.Sdump(snapOut), spew.Sdump(snapIn))
+		if diff := cmp.Diff(snapIn, snapOut); diff != "" {
+			t.Errorf("config snapshot did not survive round-trip\n%s", diff)
 		}
 	})
 

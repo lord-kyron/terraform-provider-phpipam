@@ -1,8 +1,8 @@
 package addrs
 
 import (
-	"bytes"
 	"fmt"
+	"strings"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
@@ -82,6 +82,7 @@ func parseModuleInstancePrefix(traversal hcl.Traversal) (ModuleInstance, hcl.Tra
 	var mi ModuleInstance
 	var diags tfdiags.Diagnostics
 
+LOOP:
 	for len(remain) > 0 {
 		var next string
 		switch tt := remain[0].(type) {
@@ -96,7 +97,7 @@ func parseModuleInstancePrefix(traversal hcl.Traversal) (ModuleInstance, hcl.Tra
 				Detail:   "Module address prefix must be followed by dot and then a name.",
 				Subject:  remain[0].SourceRange().Ptr(),
 			})
-			break
+			break LOOP
 		}
 
 		if next != "module" {
@@ -129,7 +130,7 @@ func parseModuleInstancePrefix(traversal hcl.Traversal) (ModuleInstance, hcl.Tra
 				Detail:   "Prefix \"module.\" must be followed by a module name.",
 				Subject:  remain[0].SourceRange().Ptr(),
 			})
-			break
+			break LOOP
 		}
 		remain = remain[1:]
 		step := ModuleInstanceStep{
@@ -250,7 +251,17 @@ func (m ModuleInstance) Parent() ModuleInstance {
 //
 // The address of the root module has the empty string as its representation.
 func (m ModuleInstance) String() string {
-	var buf bytes.Buffer
+	if len(m) == 0 {
+		return ""
+	}
+	// Calculate minimal necessary space (no instance keys).
+	l := 0
+	for _, step := range m {
+		l += len(step.Name)
+	}
+	buf := strings.Builder{}
+	// 8 is len(".module.") which separates entries.
+	buf.Grow(l + len(m)*8)
 	sep := ""
 	for _, step := range m {
 		buf.WriteString(sep)
@@ -267,7 +278,16 @@ func (m ModuleInstance) String() string {
 // Equal returns true if the receiver and the given other value
 // contains the exact same parts.
 func (m ModuleInstance) Equal(o ModuleInstance) bool {
-	return m.String() == o.String()
+	if len(m) != len(o) {
+		return false
+	}
+
+	for i := range m {
+		if m[i] != o[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // Less returns true if the receiver should sort before the given other value

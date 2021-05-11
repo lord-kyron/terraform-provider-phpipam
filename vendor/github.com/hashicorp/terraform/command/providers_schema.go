@@ -20,7 +20,7 @@ func (c *ProvidersSchemaCommand) Help() string {
 }
 
 func (c *ProvidersSchemaCommand) Synopsis() string {
-	return "Prints the schemas of the providers used in the configuration"
+	return "Show schemas for the providers used in the configuration"
 }
 
 func (c *ProvidersSchemaCommand) Run(args []string) int {
@@ -67,6 +67,9 @@ func (c *ProvidersSchemaCommand) Run(args []string) int {
 		return 1
 	}
 
+	// This is a read-only command
+	c.ignoreRemoteBackendVersionConflict(b)
+
 	// we expect that the config dir is the cwd
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -105,7 +108,7 @@ func (c *ProvidersSchemaCommand) Run(args []string) int {
 }
 
 const providersSchemaCommandHelp = `
-Usage: terraform providers schema -json
+Usage: terraform [global options] providers schema -json
 
   Prints out a json representation of the schemas for all providers used 
   in the current configuration.

@@ -4,19 +4,21 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform/addrs"
 	"github.com/hashicorp/terraform/backend"
+	"github.com/hashicorp/terraform/command/arguments"
+	"github.com/hashicorp/terraform/command/clistate"
+	"github.com/hashicorp/terraform/command/views"
 	"github.com/hashicorp/terraform/configs/configschema"
 	"github.com/hashicorp/terraform/internal/initwd"
+	"github.com/hashicorp/terraform/internal/terminal"
 	"github.com/hashicorp/terraform/plans"
 	"github.com/hashicorp/terraform/plans/planfile"
 	"github.com/hashicorp/terraform/states"
 	"github.com/hashicorp/terraform/terraform"
-	"github.com/mitchellh/cli"
 	"github.com/zclconf/go-cty/cty"
 )
 
@@ -25,7 +27,7 @@ func TestLocal_planBasic(t *testing.T) {
 	defer cleanup()
 	p := TestLocalProvider(t, b, "test", planFixtureSchema())
 
-	op, configCleanup := testOperationPlan(t, "./testdata/plan")
+	op, configCleanup, done := testOperationPlan(t, "./testdata/plan")
 	defer configCleanup()
 	op.PlanRefresh = true
 
@@ -44,6 +46,10 @@ func TestLocal_planBasic(t *testing.T) {
 
 	// the backend should be unlocked after a run
 	assertBackendStateUnlocked(t, b)
+
+	if errOutput := done(t).Stderr(); errOutput != "" {
+		t.Fatalf("unexpected error output:\n%s", errOutput)
+	}
 }
 
 func TestLocal_planInAutomation(t *testing.T) {
@@ -51,60 +57,31 @@ func TestLocal_planInAutomation(t *testing.T) {
 	defer cleanup()
 	TestLocalProvider(t, b, "test", planFixtureSchema())
 
-	const msg = `You didn't specify an "-out" parameter`
+	const msg = `You didn't use the -out option`
 
-	// When we're "in automation" we omit certain text from the
-	// plan output. However, testing for the absense of text is
-	// unreliable in the face of future copy changes, so we'll
-	// mitigate that by running both with and without the flag
-	// set so we can ensure that the expected messages _are_
-	// included the first time.
-	b.RunningInAutomation = false
-	b.CLI = cli.NewMockUi()
-	{
-		op, configCleanup := testOperationPlan(t, "./testdata/plan")
-		defer configCleanup()
-		op.PlanRefresh = true
+	// When we're "in automation" we omit certain text from the plan output.
+	// However, the responsibility for this omission is in the view, so here we
+	// test for its presence while the "in automation" setting is false, to
+	// validate that we are calling the correct view method.
+	//
+	// Ideally this test would be replaced by a call-logging mock view, but
+	// that's future work.
+	op, configCleanup, done := testOperationPlan(t, "./testdata/plan")
+	defer configCleanup()
+	op.PlanRefresh = true
 
-		run, err := b.Operation(context.Background(), op)
-		if err != nil {
-			t.Fatalf("unexpected error: %s", err)
-		}
-		<-run.Done()
-		if run.Result != backend.OperationSuccess {
-			t.Fatalf("plan operation failed")
-		}
-
-		output := b.CLI.(*cli.MockUi).OutputWriter.String()
-		if !strings.Contains(output, msg) {
-			t.Fatalf("missing next-steps message when not in automation")
-		}
+	run, err := b.Operation(context.Background(), op)
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+	<-run.Done()
+	if run.Result != backend.OperationSuccess {
+		t.Fatalf("plan operation failed")
 	}
 
-	// On the second run, we expect the next-steps messaging to be absent
-	// since we're now "running in automation".
-	b.RunningInAutomation = true
-	b.CLI = cli.NewMockUi()
-	{
-		op, configCleanup := testOperationPlan(t, "./testdata/plan")
-		defer configCleanup()
-		op.PlanRefresh = true
-
-		run, err := b.Operation(context.Background(), op)
-		if err != nil {
-			t.Fatalf("unexpected error: %s", err)
-		}
-		<-run.Done()
-		if run.Result != backend.OperationSuccess {
-			t.Fatalf("plan operation failed")
-		}
-
-		output := b.CLI.(*cli.MockUi).OutputWriter.String()
-		if strings.Contains(output, msg) {
-			t.Fatalf("next-steps message present when in automation")
-		}
+	if output := done(t).Stdout(); !strings.Contains(output, msg) {
+		t.Fatalf("missing next-steps message when not in automation\nwant: %s\noutput:\n%s", msg, output)
 	}
-
 }
 
 func TestLocal_planNoConfig(t *testing.T) {
@@ -112,9 +89,7 @@ func TestLocal_planNoConfig(t *testing.T) {
 	defer cleanup()
 	TestLocalProvider(t, b, "test", &terraform.ProviderSchema{})
 
-	b.CLI = cli.NewMockUi()
-
-	op, configCleanup := testOperationPlan(t, "./testdata/empty")
+	op, configCleanup, done := testOperationPlan(t, "./testdata/empty")
 	defer configCleanup()
 	op.PlanRefresh = true
 
@@ -124,12 +99,14 @@ func TestLocal_planNoConfig(t *testing.T) {
 	}
 	<-run.Done()
 
+	output := done(t)
+
 	if run.Result == backend.OperationSuccess {
 		t.Fatal("plan operation succeeded; want failure")
 	}
-	output := b.CLI.(*cli.MockUi).ErrorWriter.String()
-	if !strings.Contains(output, "configuration") {
-		t.Fatalf("bad: %s", err)
+
+	if stderr := output.Stderr(); !strings.Contains(stderr, "No configuration files") {
+		t.Fatalf("bad: %s", stderr)
 	}
 
 	// the backend should be unlocked after a run
@@ -142,7 +119,7 @@ func TestLocal_plan_context_error(t *testing.T) {
 	b, cleanup := TestLocal(t)
 	defer cleanup()
 
-	op, configCleanup := testOperationPlan(t, "./testdata/plan")
+	op, configCleanup, done := testOperationPlan(t, "./testdata/plan")
 	defer configCleanup()
 	op.PlanRefresh = true
 
@@ -158,6 +135,10 @@ func TestLocal_plan_context_error(t *testing.T) {
 
 	// the backend should be unlocked after a run
 	assertBackendStateUnlocked(t, b)
+
+	if got, want := done(t).Stderr(), "Error: Could not load plugin"; !strings.Contains(got, want) {
+		t.Fatalf("unexpected error output:\n%s\nwant: %s", got, want)
+	}
 }
 
 func TestLocal_planOutputsChanged(t *testing.T) {
@@ -193,11 +174,10 @@ func TestLocal_planOutputsChanged(t *testing.T) {
 		// unknown" situation because that's already common for printing out
 		// resource changes and we already have many tests for that.
 	}))
-	b.CLI = cli.NewMockUi()
 	outDir := testTempDir(t)
 	defer os.RemoveAll(outDir)
 	planPath := filepath.Join(outDir, "plan.tfplan")
-	op, configCleanup := testOperationPlan(t, "./testdata/plan-outputs-changed")
+	op, configCleanup, done := testOperationPlan(t, "./testdata/plan-outputs-changed")
 	defer configCleanup()
 	op.PlanRefresh = true
 	op.PlanOutPath = planPath
@@ -235,8 +215,56 @@ Changes to Outputs:
   ~ sensitive_after  = (sensitive value)
   ~ sensitive_before = (sensitive value)
 `)
-	output := b.CLI.(*cli.MockUi).OutputWriter.String()
-	if !strings.Contains(output, expectedOutput) {
+
+	if output := done(t).Stdout(); !strings.Contains(output, expectedOutput) {
+		t.Fatalf("Unexpected output:\n%s\n\nwant output containing:\n%s", output, expectedOutput)
+	}
+}
+
+// Module outputs should not cause the plan to be rendered
+func TestLocal_planModuleOutputsChanged(t *testing.T) {
+	b, cleanup := TestLocal(t)
+	defer cleanup()
+	testStateFile(t, b.StatePath, states.BuildState(func(ss *states.SyncState) {
+		ss.SetOutputValue(addrs.AbsOutputValue{
+			Module:      addrs.RootModuleInstance.Child("mod", addrs.NoKey),
+			OutputValue: addrs.OutputValue{Name: "changed"},
+		}, cty.StringVal("before"), false)
+	}))
+	outDir := testTempDir(t)
+	defer os.RemoveAll(outDir)
+	planPath := filepath.Join(outDir, "plan.tfplan")
+	op, configCleanup, done := testOperationPlan(t, "./testdata/plan-module-outputs-changed")
+	defer configCleanup()
+	op.PlanRefresh = true
+	op.PlanOutPath = planPath
+	cfg := cty.ObjectVal(map[string]cty.Value{
+		"path": cty.StringVal(b.StatePath),
+	})
+	cfgRaw, err := plans.NewDynamicValue(cfg, cfg.Type())
+	if err != nil {
+		t.Fatal(err)
+	}
+	op.PlanOutBackend = &plans.Backend{
+		Type:   "local",
+		Config: cfgRaw,
+	}
+	run, err := b.Operation(context.Background(), op)
+	if err != nil {
+		t.Fatalf("bad: %s", err)
+	}
+	<-run.Done()
+	if run.Result != backend.OperationSuccess {
+		t.Fatalf("plan operation failed")
+	}
+	if !run.PlanEmpty {
+		t.Fatal("plan should be empty")
+	}
+
+	expectedOutput := strings.TrimSpace(`
+No changes. Infrastructure is up-to-date.
+`)
+	if output := done(t).Stdout(); !strings.Contains(output, expectedOutput) {
 		t.Fatalf("Unexpected output:\n%s\n\nwant output containing:\n%s", output, expectedOutput)
 	}
 }
@@ -246,11 +274,10 @@ func TestLocal_planTainted(t *testing.T) {
 	defer cleanup()
 	p := TestLocalProvider(t, b, "test", planFixtureSchema())
 	testStateFile(t, b.StatePath, testPlanState_tainted())
-	b.CLI = cli.NewMockUi()
 	outDir := testTempDir(t)
 	defer os.RemoveAll(outDir)
 	planPath := filepath.Join(outDir, "plan.tfplan")
-	op, configCleanup := testOperationPlan(t, "./testdata/plan")
+	op, configCleanup, done := testOperationPlan(t, "./testdata/plan")
 	defer configCleanup()
 	op.PlanRefresh = true
 	op.PlanOutPath = planPath
@@ -281,8 +308,8 @@ func TestLocal_planTainted(t *testing.T) {
 		t.Fatal("plan should not be empty")
 	}
 
-	expectedOutput := `An execution plan has been generated and is shown below.
-Resource actions are indicated with the following symbols:
+	expectedOutput := `Terraform used the selected providers to generate the following execution
+plan. Resource actions are indicated with the following symbols:
 -/+ destroy and then create replacement
 
 Terraform will perform the following actions:
@@ -295,8 +322,7 @@ Terraform will perform the following actions:
     }
 
 Plan: 1 to add, 0 to change, 1 to destroy.`
-	output := b.CLI.(*cli.MockUi).OutputWriter.String()
-	if !strings.Contains(output, expectedOutput) {
+	if output := done(t).Stdout(); !strings.Contains(output, expectedOutput) {
 		t.Fatalf("Unexpected output:\n%s", output)
 	}
 }
@@ -329,11 +355,10 @@ func TestLocal_planDeposedOnly(t *testing.T) {
 			},
 		)
 	}))
-	b.CLI = cli.NewMockUi()
 	outDir := testTempDir(t)
 	defer os.RemoveAll(outDir)
 	planPath := filepath.Join(outDir, "plan.tfplan")
-	op, configCleanup := testOperationPlan(t, "./testdata/plan")
+	op, configCleanup, done := testOperationPlan(t, "./testdata/plan")
 	defer configCleanup()
 	op.PlanRefresh = true
 	op.PlanOutPath = planPath
@@ -383,8 +408,8 @@ func TestLocal_planDeposedOnly(t *testing.T) {
 	// it's also possible for there to be _multiple_ deposed objects, in the
 	// unlikely event that create_before_destroy _keeps_ crashing across
 	// subsequent runs.
-	expectedOutput := `An execution plan has been generated and is shown below.
-Resource actions are indicated with the following symbols:
+	expectedOutput := `Terraform used the selected providers to generate the following execution
+plan. Resource actions are indicated with the following symbols:
   + create
   - destroy
 
@@ -411,9 +436,8 @@ Terraform will perform the following actions:
     }
 
 Plan: 1 to add, 0 to change, 1 to destroy.`
-	output := b.CLI.(*cli.MockUi).OutputWriter.String()
-	if !strings.Contains(output, expectedOutput) {
-		t.Fatalf("Unexpected output:\n%s\n\nwant output containing:\n%s", output, expectedOutput)
+	if output := done(t).Stdout(); !strings.Contains(output, expectedOutput) {
+		t.Fatalf("Unexpected output:\n%s", output)
 	}
 }
 
@@ -422,11 +446,10 @@ func TestLocal_planTainted_createBeforeDestroy(t *testing.T) {
 	defer cleanup()
 	p := TestLocalProvider(t, b, "test", planFixtureSchema())
 	testStateFile(t, b.StatePath, testPlanState_tainted())
-	b.CLI = cli.NewMockUi()
 	outDir := testTempDir(t)
 	defer os.RemoveAll(outDir)
 	planPath := filepath.Join(outDir, "plan.tfplan")
-	op, configCleanup := testOperationPlan(t, "./testdata/plan-cbd")
+	op, configCleanup, done := testOperationPlan(t, "./testdata/plan-cbd")
 	defer configCleanup()
 	op.PlanRefresh = true
 	op.PlanOutPath = planPath
@@ -457,8 +480,8 @@ func TestLocal_planTainted_createBeforeDestroy(t *testing.T) {
 		t.Fatal("plan should not be empty")
 	}
 
-	expectedOutput := `An execution plan has been generated and is shown below.
-Resource actions are indicated with the following symbols:
+	expectedOutput := `Terraform used the selected providers to generate the following execution
+plan. Resource actions are indicated with the following symbols:
 +/- create replacement and then destroy
 
 Terraform will perform the following actions:
@@ -471,8 +494,7 @@ Terraform will perform the following actions:
     }
 
 Plan: 1 to add, 0 to change, 1 to destroy.`
-	output := b.CLI.(*cli.MockUi).OutputWriter.String()
-	if !strings.Contains(output, expectedOutput) {
+	if output := done(t).Stdout(); !strings.Contains(output, expectedOutput) {
 		t.Fatalf("Unexpected output:\n%s", output)
 	}
 }
@@ -484,7 +506,7 @@ func TestLocal_planRefreshFalse(t *testing.T) {
 	p := TestLocalProvider(t, b, "test", planFixtureSchema())
 	testStateFile(t, b.StatePath, testPlanState())
 
-	op, configCleanup := testOperationPlan(t, "./testdata/plan")
+	op, configCleanup, done := testOperationPlan(t, "./testdata/plan")
 	defer configCleanup()
 
 	run, err := b.Operation(context.Background(), op)
@@ -503,22 +525,26 @@ func TestLocal_planRefreshFalse(t *testing.T) {
 	if !run.PlanEmpty {
 		t.Fatal("plan should be empty")
 	}
+
+	if errOutput := done(t).Stderr(); errOutput != "" {
+		t.Fatalf("unexpected error output:\n%s", errOutput)
+	}
 }
 
 func TestLocal_planDestroy(t *testing.T) {
 	b, cleanup := TestLocal(t)
 	defer cleanup()
 
-	p := TestLocalProvider(t, b, "test", planFixtureSchema())
+	TestLocalProvider(t, b, "test", planFixtureSchema())
 	testStateFile(t, b.StatePath, testPlanState())
 
 	outDir := testTempDir(t)
 	defer os.RemoveAll(outDir)
 	planPath := filepath.Join(outDir, "plan.tfplan")
 
-	op, configCleanup := testOperationPlan(t, "./testdata/plan")
+	op, configCleanup, done := testOperationPlan(t, "./testdata/plan")
 	defer configCleanup()
-	op.Destroy = true
+	op.PlanMode = plans.DestroyMode
 	op.PlanRefresh = true
 	op.PlanOutPath = planPath
 	cfg := cty.ObjectVal(map[string]cty.Value{
@@ -541,10 +567,6 @@ func TestLocal_planDestroy(t *testing.T) {
 	<-run.Done()
 	if run.Result != backend.OperationSuccess {
 		t.Fatalf("plan operation failed")
-	}
-
-	if p.ReadResourceCalled {
-		t.Fatal("ReadResource should not be called")
 	}
 
 	if run.PlanEmpty {
@@ -557,24 +579,26 @@ func TestLocal_planDestroy(t *testing.T) {
 			t.Fatalf("bad: %#v", r.Action.String())
 		}
 	}
+
+	if errOutput := done(t).Stderr(); errOutput != "" {
+		t.Fatalf("unexpected error output:\n%s", errOutput)
+	}
 }
 
 func TestLocal_planDestroy_withDataSources(t *testing.T) {
 	b, cleanup := TestLocal(t)
 	defer cleanup()
 
-	p := TestLocalProvider(t, b, "test", planFixtureSchema())
+	TestLocalProvider(t, b, "test", planFixtureSchema())
 	testStateFile(t, b.StatePath, testPlanState_withDataSource())
-
-	b.CLI = cli.NewMockUi()
 
 	outDir := testTempDir(t)
 	defer os.RemoveAll(outDir)
 	planPath := filepath.Join(outDir, "plan.tfplan")
 
-	op, configCleanup := testOperationPlan(t, "./testdata/destroy-with-ds")
+	op, configCleanup, done := testOperationPlan(t, "./testdata/destroy-with-ds")
 	defer configCleanup()
-	op.Destroy = true
+	op.PlanMode = plans.DestroyMode
 	op.PlanRefresh = true
 	op.PlanOutPath = planPath
 	cfg := cty.ObjectVal(map[string]cty.Value{
@@ -597,14 +621,6 @@ func TestLocal_planDestroy_withDataSources(t *testing.T) {
 	<-run.Done()
 	if run.Result != backend.OperationSuccess {
 		t.Fatalf("plan operation failed")
-	}
-
-	if p.ReadResourceCalled {
-		t.Fatal("ReadResource should not be called")
-	}
-
-	if p.ReadDataSourceCalled {
-		t.Fatal("ReadDataSourceCalled should not be called")
 	}
 
 	if run.PlanEmpty {
@@ -633,14 +649,13 @@ func TestLocal_planDestroy_withDataSources(t *testing.T) {
 
 Plan: 0 to add, 0 to change, 1 to destroy.`
 
-	output := b.CLI.(*cli.MockUi).OutputWriter.String()
-	if !strings.Contains(output, expectedOutput) {
+	if output := done(t).Stdout(); !strings.Contains(output, expectedOutput) {
 		t.Fatalf("Unexpected output:\n%s", output)
 	}
 }
 
 func getAddrs(resources []*plans.ResourceInstanceChangeSrc) []string {
-	addrs := make([]string, len(resources), len(resources))
+	addrs := make([]string, len(resources))
 	for i, r := range resources {
 		addrs[i] = r.Addr.String()
 	}
@@ -657,7 +672,7 @@ func TestLocal_planOutPathNoChange(t *testing.T) {
 	defer os.RemoveAll(outDir)
 	planPath := filepath.Join(outDir, "plan.tfplan")
 
-	op, configCleanup := testOperationPlan(t, "./testdata/plan")
+	op, configCleanup, done := testOperationPlan(t, "./testdata/plan")
 	defer configCleanup()
 	op.PlanOutPath = planPath
 	cfg := cty.ObjectVal(map[string]cty.Value{
@@ -688,61 +703,27 @@ func TestLocal_planOutPathNoChange(t *testing.T) {
 	if !plan.Changes.Empty() {
 		t.Fatalf("expected empty plan to be written")
 	}
-}
 
-// TestLocal_planScaleOutNoDupeCount tests a Refresh/Plan sequence when a
-// resource count is scaled out. The scaled out node needs to exist in the
-// graph and run through a plan-style sequence during the refresh phase, but
-// can conflate the count if its post-diff count hooks are not skipped. This
-// checks to make sure the correct resource count is ultimately given to the
-// UI.
-func TestLocal_planScaleOutNoDupeCount(t *testing.T) {
-	b, cleanup := TestLocal(t)
-	defer cleanup()
-	TestLocalProvider(t, b, "test", planFixtureSchema())
-	testStateFile(t, b.StatePath, testPlanState())
-
-	actual := new(CountHook)
-	b.ContextOpts.Hooks = append(b.ContextOpts.Hooks, actual)
-
-	outDir := testTempDir(t)
-	defer os.RemoveAll(outDir)
-
-	op, configCleanup := testOperationPlan(t, "./testdata/plan-scaleout")
-	defer configCleanup()
-	op.PlanRefresh = true
-
-	run, err := b.Operation(context.Background(), op)
-	if err != nil {
-		t.Fatalf("bad: %s", err)
-	}
-	<-run.Done()
-	if run.Result != backend.OperationSuccess {
-		t.Fatalf("plan operation failed")
-	}
-
-	expected := new(CountHook)
-	expected.ToAdd = 1
-	expected.ToChange = 0
-	expected.ToRemoveAndAdd = 0
-	expected.ToRemove = 0
-
-	if !reflect.DeepEqual(expected, actual) {
-		t.Fatalf("Expected %#v, got %#v instead.",
-			expected, actual)
+	if errOutput := done(t).Stderr(); errOutput != "" {
+		t.Fatalf("unexpected error output:\n%s", errOutput)
 	}
 }
 
-func testOperationPlan(t *testing.T, configDir string) (*backend.Operation, func()) {
+func testOperationPlan(t *testing.T, configDir string) (*backend.Operation, func(), func(*testing.T) *terminal.TestOutput) {
 	t.Helper()
 
 	_, configLoader, configCleanup := initwd.MustLoadConfigForTests(t, configDir)
+
+	streams, done := terminal.StreamsForTesting(t)
+	view := views.NewOperation(arguments.ViewHuman, false, views.NewView(streams))
 
 	return &backend.Operation{
 		Type:         backend.OperationTypePlan,
 		ConfigDir:    configDir,
 		ConfigLoader: configLoader,
-	}, configCleanup
+		StateLocker:  clistate.NewNoopLocker(),
+		View:         view,
+	}, configCleanup, done
 }
 
 // testPlanState is just a common state that we use for testing plan.

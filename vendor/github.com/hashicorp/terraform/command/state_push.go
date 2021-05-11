@@ -1,13 +1,14 @@
 package command
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 
+	"github.com/hashicorp/terraform/command/arguments"
 	"github.com/hashicorp/terraform/command/clistate"
+	"github.com/hashicorp/terraform/command/views"
 	"github.com/hashicorp/terraform/states/statefile"
 	"github.com/hashicorp/terraform/states/statemgr"
 	"github.com/mitchellh/cli"
@@ -22,7 +23,7 @@ type StatePushCommand struct {
 func (c *StatePushCommand) Run(args []string) int {
 	args = c.Meta.process(args)
 	var flagForce bool
-	cmdFlags := c.Meta.defaultFlagSet("state push")
+	cmdFlags := c.Meta.ignoreRemoteVersionFlagSet("state push")
 	cmdFlags.BoolVar(&flagForce, "force", false, "")
 	cmdFlags.BoolVar(&c.Meta.stateLock, "lock", true, "lock state")
 	cmdFlags.DurationVar(&c.Meta.stateLockTimeout, "lock-timeout", 0, "lock timeout")
@@ -71,25 +72,38 @@ func (c *StatePushCommand) Run(args []string) int {
 		return 1
 	}
 
-	// Get the state manager for the currently-selected workspace
-	env, err := c.Workspace()
+	// Determine the workspace name
+	workspace, err := c.Workspace()
 	if err != nil {
 		c.Ui.Error(fmt.Sprintf("Error selecting workspace: %s", err))
 		return 1
 	}
-	stateMgr, err := b.StateMgr(env)
+
+	// Check remote Terraform version is compatible
+	remoteVersionDiags := c.remoteBackendVersionCheck(b, workspace)
+	c.showDiagnostics(remoteVersionDiags)
+	if remoteVersionDiags.HasErrors() {
+		return 1
+	}
+
+	// Get the state manager for the currently-selected workspace
+	stateMgr, err := b.StateMgr(workspace)
 	if err != nil {
 		c.Ui.Error(fmt.Sprintf("Failed to load destination state: %s", err))
 		return 1
 	}
 
 	if c.stateLock {
-		stateLocker := clistate.NewLocker(context.Background(), c.stateLockTimeout, c.Ui, c.Colorize())
-		if err := stateLocker.Lock(stateMgr, "state-push"); err != nil {
-			c.Ui.Error(fmt.Sprintf("Error locking state: %s", err))
+		stateLocker := clistate.NewLocker(c.stateLockTimeout, views.NewStateLocker(arguments.ViewHuman, c.View))
+		if diags := stateLocker.Lock(stateMgr, "state-push"); diags.HasErrors() {
+			c.showDiagnostics(diags)
 			return 1
 		}
-		defer stateLocker.Unlock(nil)
+		defer func() {
+			if diags := stateLocker.Unlock(); diags.HasErrors() {
+				c.showDiagnostics(diags)
+			}
+		}()
 	}
 
 	if err := stateMgr.RefreshState(); err != nil {
@@ -121,7 +135,7 @@ func (c *StatePushCommand) Run(args []string) int {
 
 func (c *StatePushCommand) Help() string {
 	helpText := `
-Usage: terraform state push [options] PATH
+Usage: terraform [global options] state push [options] PATH
 
   Update remote state from a local state file at PATH.
 

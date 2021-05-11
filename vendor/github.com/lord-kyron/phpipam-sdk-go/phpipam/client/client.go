@@ -4,10 +4,11 @@ package client
 
 import (
 	"fmt"
+	"log"
 
-	"github.com/lord-kyron/phpipam-sdk-go/phpipam"
-	"github.com/lord-kyron/phpipam-sdk-go/phpipam/request"
-	"github.com/lord-kyron/phpipam-sdk-go/phpipam/session"
+	"github.com/pavel-z1/phpipam-sdk-go/phpipam"
+	"github.com/pavel-z1/phpipam-sdk-go/phpipam/request"
+	"github.com/pavel-z1/phpipam-sdk-go/phpipam/session"
 )
 
 // Client encompasses a generic client object that is further extended by
@@ -99,7 +100,9 @@ func (c *Client) GetCustomFieldsSchema(controller string) (out map[string]phpipa
 func (c *Client) GetCustomFields(id int, controller string) (out map[string]interface{}, err error) {
 	var schema map[string]phpipam.CustomField
 	schema, err = c.GetCustomFieldsSchema(controller)
-	if err != nil {
+	switch {
+	case err != nil:
+		log.Printf("Error getting custom Fields: %s", err)
 		return
 	}
 
@@ -143,7 +146,12 @@ func (c *Client) getCustomFieldsRequest(id int, controller string, schema map[st
 func (c *Client) UpdateCustomFields(id int, in map[string]interface{}, controller string) (message string, err error) {
 	var schema map[string]phpipam.CustomField
 	schema, err = c.GetCustomFieldsSchema(controller)
-	if err != nil {
+	switch {
+	// Ignore this error if the caller is not setting any fields.
+	case len(in) == 0 && err.Error() == "Error from API (200): No custom fields defined":
+		err = nil
+		return
+	case err != nil:
 		return
 	}
 	message, err = c.updateCustomFieldsRequest(id, in, controller, schema)

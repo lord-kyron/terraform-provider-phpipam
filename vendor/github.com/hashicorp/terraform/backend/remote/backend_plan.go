@@ -17,8 +17,11 @@ import (
 	tfe "github.com/hashicorp/go-tfe"
 	version "github.com/hashicorp/go-version"
 	"github.com/hashicorp/terraform/backend"
+	"github.com/hashicorp/terraform/plans"
 	"github.com/hashicorp/terraform/tfdiags"
 )
+
+var planConfigurationVersionsPollInterval = 500 * time.Millisecond
 
 func (b *Remote) opPlan(stopCtx, cancelCtx context.Context, op *backend.Operation, w *tfe.Workspace) (*tfe.Run, error) {
 	log.Printf("[INFO] backend/remote: starting Plan operation")
@@ -87,7 +90,7 @@ func (b *Remote) opPlan(stopCtx, cancelCtx context.Context, op *backend.Operatio
 		))
 	}
 
-	if !op.HasConfig() && !op.Destroy {
+	if !op.HasConfig() && op.PlanMode != plans.DestroyMode {
 		diags = diags.Append(tfdiags.Sourceless(
 			tfdiags.Error,
 			"No configuration files found",
@@ -213,7 +216,7 @@ in order to capture the filesystem context the remote workspace expects:
 			return nil, context.Canceled
 		case <-cancelCtx.Done():
 			return nil, context.Canceled
-		case <-time.After(500 * time.Millisecond):
+		case <-time.After(planConfigurationVersionsPollInterval):
 			cv, err = b.client.ConfigurationVersions.Read(stopCtx, cv.ID)
 			if err != nil {
 				return nil, generalError("Failed to retrieve configuration version", err)
@@ -236,10 +239,24 @@ in order to capture the filesystem context the remote workspace expects:
 	}
 
 	runOptions := tfe.RunCreateOptions{
-		IsDestroy:            tfe.Bool(op.Destroy),
 		Message:              tfe.String(queueMessage),
 		ConfigurationVersion: cv,
 		Workspace:            w,
+	}
+
+	switch op.PlanMode {
+	case plans.NormalMode:
+		// okay, but we don't need to do anything special for this
+	case plans.DestroyMode:
+		runOptions.IsDestroy = tfe.Bool(true)
+	default:
+		// Shouldn't get here because we should update this for each new
+		// plan mode we add, mapping it to the corresponding RunCreateOptions
+		// field.
+		return nil, generalError(
+			"Invalid plan mode",
+			fmt.Errorf("remote backend doesn't support %s", op.PlanMode),
+		)
 	}
 
 	if len(op.Targets) != 0 {
@@ -258,15 +275,16 @@ in order to capture the filesystem context the remote workspace expects:
 		return r, generalError("Failed to create run", err)
 	}
 
-	// When the lock timeout is set,
-	if op.StateLockTimeout > 0 {
+	// When the lock timeout is set, if the run is still pending and
+	// cancellable after that period, we attempt to cancel it.
+	if lockTimeout := op.StateLocker.Timeout(); lockTimeout > 0 {
 		go func() {
 			select {
 			case <-stopCtx.Done():
 				return
 			case <-cancelCtx.Done():
 				return
-			case <-time.After(op.StateLockTimeout):
+			case <-time.After(lockTimeout):
 				// Retrieve the run to get its current status.
 				r, err := b.client.Runs.Read(cancelCtx, r.ID)
 				if err != nil {

@@ -44,6 +44,9 @@ type Config struct {
 
 	// The user name for the PHPIPAM account.
 	Username string
+
+	// Allow HTTPS connection without verification issuer
+	Insecure bool
 }
 
 // DefaultConfigProvider supplies a default configuration:

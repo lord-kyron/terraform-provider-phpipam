@@ -25,17 +25,17 @@ type Provider struct {
 	Config hcl.Body
 
 	DeclRange hcl.Range
+
+	// TODO: this may not be set in some cases, so it is not yet suitable for
+	// use outside of this package. We currently only use it for internal
+	// validation, but once we verify that this can be set in all cases, we can
+	// export this so providers don't need to be re-resolved.
+	// This same field is also added to the ProviderConfigRef struct.
+	providerType addrs.Provider
 }
 
 func decodeProviderBlock(block *hcl.Block) (*Provider, hcl.Diagnostics) {
 	var diags hcl.Diagnostics
-
-	// Produce deprecation messages for any pre-0.12-style
-	// single-interpolation-only expressions. We do this up front here because
-	// then we can also catch instances inside special blocks like "connection",
-	// before PartialContent extracts them.
-	moreDiags := warnForDeprecatedInterpolationsInBody(block.Body)
-	diags = append(diags, moreDiags...)
 
 	content, config, moreDiags := block.Body.PartialContent(providerBlockSchema)
 	diags = append(diags, moreDiags...)

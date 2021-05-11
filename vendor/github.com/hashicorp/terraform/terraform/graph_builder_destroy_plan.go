@@ -12,7 +12,10 @@ import (
 // planning a pure-destroy.
 //
 // Planning a pure destroy operation is simple because we can ignore most
-// ordering configuration and simply reverse the state.
+// ordering configuration and simply reverse the state. This graph mainly
+// exists for targeting, because we need to walk the destroy dependencies to
+// ensure we plan the required resources. Without the requirement for
+// targeting, the plan could theoretically be created directly from the state.
 type DestroyPlanGraphBuilder struct {
 	// Config is the configuration tree to build the plan from.
 	Config *configs.Config
@@ -33,6 +36,11 @@ type DestroyPlanGraphBuilder struct {
 
 	// Validate will do structural validation of the graph.
 	Validate bool
+
+	// If set, skipRefresh will cause us stop skip refreshing any existing
+	// resource instances as part of our planning. This will cause us to fail
+	// to detect if an object has already been deleted outside of Terraform.
+	skipRefresh bool
 }
 
 // See GraphBuilder
@@ -49,6 +57,7 @@ func (b *DestroyPlanGraphBuilder) Steps() []GraphTransformer {
 	concreteResourceInstance := func(a *NodeAbstractResourceInstance) dag.Vertex {
 		return &NodePlanDestroyableResourceInstance{
 			NodeAbstractResourceInstance: a,
+			skipRefresh:                  b.skipRefresh,
 		}
 	}
 	concreteResourceInstanceDeposed := func(a *NodeAbstractResourceInstance, key states.DeposedKey) dag.Vertex {
@@ -72,6 +81,7 @@ func (b *DestroyPlanGraphBuilder) Steps() []GraphTransformer {
 			State:           b.State,
 		},
 
+		// Create the delete changes for root module outputs.
 		&OutputTransformer{
 			Config:  b.Config,
 			Destroy: true,
@@ -93,8 +103,6 @@ func (b *DestroyPlanGraphBuilder) Steps() []GraphTransformer {
 			Schemas: b.Schemas,
 		},
 
-		// Target. Note we don't set "Destroy: true" here since we already
-		// created proper destroy ordering.
 		&TargetsTransformer{Targets: b.Targets},
 
 		// Close opened plugin connections

@@ -67,9 +67,31 @@ type change struct {
 	// or "after" is unset (respectively). For ["no-op"], the before and after
 	// values are identical. The "after" value will be incomplete if there are
 	// values within it that won't be known until after apply.
-	Before       json.RawMessage `json:"before,omitempty"`
-	After        json.RawMessage `json:"after,omitempty"`
+	Before json.RawMessage `json:"before,omitempty"`
+	After  json.RawMessage `json:"after,omitempty"`
+
+	// AfterUnknown is an object value with similar structure to After, but
+	// with all unknown leaf values replaced with true, and all known leaf
+	// values omitted.  This can be combined with After to reconstruct a full
+	// value after the action, including values which will only be known after
+	// apply.
 	AfterUnknown json.RawMessage `json:"after_unknown,omitempty"`
+
+	// BeforeSensitive and AfterSensitive are object values with similar
+	// structure to Before and After, but with all sensitive leaf values
+	// replaced with true, and all non-sensitive leaf values omitted. These
+	// objects should be combined with Before and After to prevent accidental
+	// display of sensitive values in user interfaces.
+	BeforeSensitive json.RawMessage `json:"before_sensitive,omitempty"`
+	AfterSensitive  json.RawMessage `json:"after_sensitive,omitempty"`
+
+	// ReplacePaths is an array of arrays representing a set of paths into the
+	// object value which resulted in the action being "replace". This will be
+	// omitted if the action is not replace, or if no paths caused the
+	// replacement (for example, if the resource was tainted). Each path
+	// consists of one or more steps, each of which will be a number or a
+	// string.
+	ReplacePaths json.RawMessage `json:"replace_paths,omitempty"`
 }
 
 type output struct {
@@ -192,9 +214,19 @@ func (p *plan) marshalResourceChanges(changes *plans.Changes, schemas *terraform
 		}
 
 		var before, after []byte
+		var beforeSensitive, afterSensitive []byte
 		var afterUnknown cty.Value
 		if changeV.Before != cty.NilVal {
 			before, err = ctyjson.Marshal(changeV.Before, changeV.Before.Type())
+			if err != nil {
+				return err
+			}
+			marks := rc.BeforeValMarks
+			if schema.ContainsSensitive() {
+				marks = append(marks, schema.ValueMarks(changeV.Before, nil)...)
+			}
+			bs := sensitiveAsBool(changeV.Before.MarkWithPaths(marks))
+			beforeSensitive, err = ctyjson.Marshal(bs, bs.Type())
 			if err != nil {
 				return err
 			}
@@ -218,18 +250,34 @@ func (p *plan) marshalResourceChanges(changes *plans.Changes, schemas *terraform
 				}
 				afterUnknown = unknownAsBool(changeV.After)
 			}
+			marks := rc.AfterValMarks
+			if schema.ContainsSensitive() {
+				marks = append(marks, schema.ValueMarks(changeV.After, nil)...)
+			}
+			as := sensitiveAsBool(changeV.After.MarkWithPaths(marks))
+			afterSensitive, err = ctyjson.Marshal(as, as.Type())
+			if err != nil {
+				return err
+			}
 		}
 
 		a, err := ctyjson.Marshal(afterUnknown, afterUnknown.Type())
 		if err != nil {
 			return err
 		}
+		replacePaths, err := encodePaths(rc.RequiredReplace)
+		if err != nil {
+			return err
+		}
 
 		r.Change = change{
-			Actions:      actionString(rc.Action.String()),
-			Before:       json.RawMessage(before),
-			After:        json.RawMessage(after),
-			AfterUnknown: a,
+			Actions:         actionString(rc.Action.String()),
+			Before:          json.RawMessage(before),
+			After:           json.RawMessage(after),
+			AfterUnknown:    a,
+			BeforeSensitive: json.RawMessage(beforeSensitive),
+			AfterSensitive:  json.RawMessage(afterSensitive),
+			ReplacePaths:    replacePaths,
 		}
 
 		if rc.DeposedKey != states.NotDeposed {
@@ -253,6 +301,19 @@ func (p *plan) marshalResourceChanges(changes *plans.Changes, schemas *terraform
 		r.Name = addr.Resource.Resource.Name
 		r.Type = addr.Resource.Resource.Type
 		r.ProviderName = rc.ProviderAddr.Provider.String()
+
+		switch rc.ActionReason {
+		case plans.ResourceInstanceChangeNoReason:
+			r.ActionReason = "" // will be omitted in output
+		case plans.ResourceInstanceReplaceBecauseCannotUpdate:
+			r.ActionReason = "replace_because_cannot_update"
+		case plans.ResourceInstanceReplaceBecauseTainted:
+			r.ActionReason = "replace_because_tainted"
+		case plans.ResourceInstanceReplaceByRequest:
+			r.ActionReason = "replace_by_request"
+		default:
+			return fmt.Errorf("resource %s has an unsupported action reason %s", r.Address, rc.ActionReason)
+		}
 
 		p.ResourceChanges = append(p.ResourceChanges, r)
 
@@ -297,13 +358,28 @@ func (p *plan) marshalOutputChanges(changes *plans.Changes) error {
 			}
 		}
 
+		// The only information we have in the plan about output sensitivity is
+		// a boolean which is true if the output was or is marked sensitive. As
+		// a result, BeforeSensitive and AfterSensitive will be identical, and
+		// either false or true.
+		outputSensitive := cty.False
+		if oc.Sensitive {
+			outputSensitive = cty.True
+		}
+		sensitive, err := ctyjson.Marshal(outputSensitive, outputSensitive.Type())
+		if err != nil {
+			return err
+		}
+
 		a, _ := ctyjson.Marshal(afterUnknown, afterUnknown.Type())
 
 		c := change{
-			Actions:      actionString(oc.Action.String()),
-			Before:       json.RawMessage(before),
-			After:        json.RawMessage(after),
-			AfterUnknown: a,
+			Actions:         actionString(oc.Action.String()),
+			Before:          json.RawMessage(before),
+			After:           json.RawMessage(after),
+			AfterUnknown:    a,
+			BeforeSensitive: json.RawMessage(sensitive),
+			AfterSensitive:  json.RawMessage(sensitive),
 		}
 
 		p.OutputChanges[oc.Addr.OutputValue.Name] = c
@@ -392,6 +468,9 @@ func omitUnknowns(val cty.Value) cty.Value {
 // tuple types and all mapping types are converted to object types, since we
 // assume the result of this is just going to be serialized as JSON (and thus
 // lose those distinctions) anyway.
+//
+// For map/object values, all known attribute values will be omitted instead of
+// returning false, as this results in a more compact serialization.
 func unknownAsBool(val cty.Value) cty.Value {
 	ty := val.Type()
 	switch {
@@ -439,7 +518,9 @@ func unknownAsBool(val cty.Value) cty.Value {
 		for it.Next() {
 			k, v := it.Element()
 			vAsBool := unknownAsBool(v)
-			if !vAsBool.RawEquals(cty.False) { // all of the "false"s for known values for more compact serialization
+			// Omit all of the "false"s for known values for more compact
+			// serialization
+			if !vAsBool.RawEquals(cty.False) {
 				vals[k.AsString()] = unknownAsBool(v)
 			}
 		}
@@ -452,6 +533,88 @@ func unknownAsBool(val cty.Value) cty.Value {
 	default:
 		// Should never happen, since the above should cover all types
 		panic(fmt.Sprintf("unknownAsBool cannot handle %#v", val))
+	}
+}
+
+// recursively iterate through a marked cty.Value, replacing sensitive values
+// with cty.True and non-sensitive values with cty.False.
+//
+// The result also normalizes some types: all sequence types are turned into
+// tuple types and all mapping types are converted to object types, since we
+// assume the result of this is just going to be serialized as JSON (and thus
+// lose those distinctions) anyway.
+//
+// For map/object values, all non-sensitive attribute values will be omitted
+// instead of returning false, as this results in a more compact serialization.
+func sensitiveAsBool(val cty.Value) cty.Value {
+	if val.HasMark("sensitive") {
+		return cty.True
+	}
+
+	ty := val.Type()
+	switch {
+	case val.IsNull(), ty.IsPrimitiveType(), ty.Equals(cty.DynamicPseudoType):
+		return cty.False
+	case ty.IsListType() || ty.IsTupleType() || ty.IsSetType():
+		if !val.IsKnown() {
+			// If the collection is unknown we can't say anything about the
+			// sensitivity of its contents
+			return cty.EmptyTupleVal
+		}
+		length := val.LengthInt()
+		if length == 0 {
+			// If there are no elements then we can't have sensitive values
+			return cty.EmptyTupleVal
+		}
+		vals := make([]cty.Value, 0, length)
+		it := val.ElementIterator()
+		for it.Next() {
+			_, v := it.Element()
+			vals = append(vals, sensitiveAsBool(v))
+		}
+		// The above transform may have changed the types of some of the
+		// elements, so we'll always use a tuple here in case we've now made
+		// different elements have different types. Our ultimate goal is to
+		// marshal to JSON anyway, and all of these sequence types are
+		// indistinguishable in JSON.
+		return cty.TupleVal(vals)
+	case ty.IsMapType() || ty.IsObjectType():
+		if !val.IsKnown() {
+			// If the map/object is unknown we can't say anything about the
+			// sensitivity of its attributes
+			return cty.EmptyObjectVal
+		}
+		var length int
+		switch {
+		case ty.IsMapType():
+			length = val.LengthInt()
+		default:
+			length = len(val.Type().AttributeTypes())
+		}
+		if length == 0 {
+			// If there are no elements then we can't have sensitive values
+			return cty.EmptyObjectVal
+		}
+		vals := make(map[string]cty.Value)
+		it := val.ElementIterator()
+		for it.Next() {
+			k, v := it.Element()
+			s := sensitiveAsBool(v)
+			// Omit all of the "false"s for non-sensitive values for more
+			// compact serialization
+			if !s.RawEquals(cty.False) {
+				vals[k.AsString()] = s
+			}
+		}
+		// The above transform may have changed the types of some of the
+		// elements, so we'll always use an object here in case we've now made
+		// different elements have different types. Our ultimate goal is to
+		// marshal to JSON anyway, and all of these mapping types are
+		// indistinguishable in JSON.
+		return cty.ObjectVal(vals)
+	default:
+		// Should never happen, since the above should cover all types
+		panic(fmt.Sprintf("sensitiveAsBool cannot handle %#v", val))
 	}
 }
 
@@ -474,4 +637,55 @@ func actionString(action string) []string {
 	default:
 		return []string{action}
 	}
+}
+
+// encodePaths lossily encodes a cty.PathSet into an array of arrays of step
+// values, such as:
+//
+//   [["length"],["triggers",0,"value"]]
+//
+// The lossiness is that we cannot distinguish between an IndexStep with string
+// key and a GetAttr step. This is fine with JSON output, because JSON's type
+// system means that those two steps are equivalent anyway: both are object
+// indexes.
+//
+// JavaScript (or similar dynamic language) consumers of these values can
+// recursively apply the steps to a given object using an index operation for
+// each step.
+func encodePaths(pathSet cty.PathSet) (json.RawMessage, error) {
+	if pathSet.Empty() {
+		return nil, nil
+	}
+
+	pathList := pathSet.List()
+	jsonPaths := make([]json.RawMessage, 0, len(pathList))
+
+	for _, path := range pathList {
+		steps := make([]json.RawMessage, 0, len(path))
+		for _, step := range path {
+			switch s := step.(type) {
+			case cty.IndexStep:
+				key, err := ctyjson.Marshal(s.Key, s.Key.Type())
+				if err != nil {
+					return nil, fmt.Errorf("Failed to marshal index step key %#v: %s", s.Key, err)
+				}
+				steps = append(steps, key)
+			case cty.GetAttrStep:
+				name, err := json.Marshal(s.Name)
+				if err != nil {
+					return nil, fmt.Errorf("Failed to marshal get attr step name %#v: %s", s.Name, err)
+				}
+				steps = append(steps, name)
+			default:
+				return nil, fmt.Errorf("Unsupported path step %#v (%t)", step, step)
+			}
+		}
+		jsonPath, err := json.Marshal(steps)
+		if err != nil {
+			return nil, err
+		}
+		jsonPaths = append(jsonPaths, jsonPath)
+	}
+
+	return json.Marshal(jsonPaths)
 }

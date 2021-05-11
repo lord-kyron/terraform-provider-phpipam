@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"log"
 	"net"
@@ -11,7 +10,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 
 	"github.com/hashicorp/go-plugin"
 	"github.com/hashicorp/terraform-svchost/disco"
@@ -19,13 +17,14 @@ import (
 	"github.com/hashicorp/terraform/command/cliconfig"
 	"github.com/hashicorp/terraform/command/format"
 	"github.com/hashicorp/terraform/httpclient"
+	"github.com/hashicorp/terraform/internal/didyoumean"
+	"github.com/hashicorp/terraform/internal/logging"
+	"github.com/hashicorp/terraform/internal/terminal"
 	"github.com/hashicorp/terraform/version"
-	"github.com/mattn/go-colorable"
 	"github.com/mattn/go-shellwords"
 	"github.com/mitchellh/cli"
 	"github.com/mitchellh/colorstring"
 	"github.com/mitchellh/panicwrap"
-	"github.com/mitchellh/prefixedio"
 
 	backendInit "github.com/hashicorp/terraform/backend/init"
 )
@@ -33,7 +32,27 @@ import (
 const (
 	// EnvCLI is the environment variable name to set additional CLI args.
 	EnvCLI = "TF_CLI_ARGS"
+
+	// The parent process will create a file to collect crash logs
+	envTmpLogPath = "TF_TEMP_LOG_PATH"
+
+	// Environment variable name used for smuggling true stderr terminal
+	// settings into a panicwrap child process. This is an implementation
+	// detail, subject to change in future, and should not ever be directly
+	// set by an end-user.
+	envTerminalPanicwrapWorkaround = "TF_PANICWRAP_STDERR"
 )
+
+// ui wraps the primary output cli.Ui, and redirects Warn calls to Output
+// calls. This ensures that warnings are sent to stdout, and are properly
+// serialized within the stdout stream.
+type ui struct {
+	cli.Ui
+}
+
+func (u *ui) Warn(msg string) {
+	u.Ui.Output(msg)
+}
 
 func main() {
 	os.Exit(realMain())
@@ -52,22 +71,35 @@ func realMain() int {
 		// there is a panic. Otherwise, we delete it.
 		logTempFile, err := ioutil.TempFile("", "terraform-log")
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Couldn't setup logging tempfile: %s", err)
+			fmt.Fprintf(os.Stderr, "Couldn't set up logging tempfile: %s", err)
 			return 1
 		}
+		// Now that we have the file, close it and leave it for the wrapped
+		// process to write to.
+		logTempFile.Close()
 		defer os.Remove(logTempFile.Name())
-		defer logTempFile.Close()
 
-		// Setup the prefixed readers that send data properly to
-		// stdout/stderr.
-		doneCh := make(chan struct{})
-		outR, outW := io.Pipe()
-		go copyOutput(outR, doneCh)
+		// store the path in the environment for the wrapped executable
+		os.Setenv(envTmpLogPath, logTempFile.Name())
+
+		// We also need to do our terminal initialization before we fork,
+		// because the child process doesn't necessarily have access to
+		// the true stderr in order to initialize it.
+		streams, err := terminal.Init()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to initialize terminal: %s", err)
+			return 1
+		}
+
+		// We need the child process to behave _as if_ connected to the real
+		// stderr, even though panicwrap is about to add a pipe in the way,
+		// so we'll smuggle the true stderr information in an environment
+		// varible.
+		streamState := streams.StateForAfterPanicWrap()
+		os.Setenv(envTerminalPanicwrapWorkaround, fmt.Sprintf("%t:%d", streamState.StderrIsTerminal, streamState.StderrWidth))
 
 		// Create the configuration for panicwrap and wrap our executable
-		wrapConfig.Handler = panicHandler(logTempFile)
-		wrapConfig.Writer = os.Stderr
-		wrapConfig.Stdout = outW
+		wrapConfig.Handler = logging.PanicHandler(logTempFile.Name())
 		wrapConfig.IgnoreSignals = ignoreSignals
 		wrapConfig.ForwardSignals = forwardSignals
 		exitStatus, err := panicwrap.Wrap(&wrapConfig)
@@ -76,20 +108,7 @@ func realMain() int {
 			return 1
 		}
 
-		// If >= 0, we're the parent, so just exit
-		if exitStatus >= 0 {
-			// Close the stdout writer so that our copy process can finish
-			outW.Close()
-
-			// Wait for the output copying to finish
-			<-doneCh
-
-			return exitStatus
-		}
-
-		// We're the child, so just close the tempfile we made in order to
-		// save file handles since the tempfile is only used by the parent.
-		logTempFile.Close()
+		return exitStatus
 	}
 
 	// Call the real main
@@ -97,26 +116,67 @@ func realMain() int {
 }
 
 func init() {
-	Ui = &cli.PrefixedUi{
-		AskPrefix:    OutputPrefix,
-		OutputPrefix: OutputPrefix,
-		InfoPrefix:   OutputPrefix,
-		ErrorPrefix:  ErrorPrefix,
-		Ui: &cli.BasicUi{
-			Writer: os.Stdout,
-			Reader: os.Stdin,
-		},
-	}
+	Ui = &ui{&cli.BasicUi{
+		Writer:      os.Stdout,
+		ErrorWriter: os.Stderr,
+		Reader:      os.Stdin,
+	}}
 }
 
 func wrappedMain() int {
 	var err error
 
+	tmpLogPath := os.Getenv(envTmpLogPath)
+	if tmpLogPath != "" {
+		f, err := os.OpenFile(tmpLogPath, os.O_RDWR|os.O_APPEND, 0666)
+		if err == nil {
+			defer f.Close()
+
+			log.Printf("[DEBUG] Adding temp file log sink: %s", f.Name())
+			logging.RegisterSink(f)
+		} else {
+			log.Printf("[ERROR] Could not open temp log file: %v", err)
+		}
+	}
+
 	log.Printf(
-		"[INFO] Terraform version: %s %s %s",
-		Version, VersionPrerelease, GitCommit)
+		"[INFO] Terraform version: %s %s",
+		Version, VersionPrerelease)
 	log.Printf("[INFO] Go runtime version: %s", runtime.Version())
 	log.Printf("[INFO] CLI args: %#v", os.Args)
+
+	// This is the recieving end of our workaround to retain the metadata
+	// about the real stderr even though we're talking to it via the panicwrap
+	// pipe. See the call to StateForAfterPanicWrap above for the producer
+	// part of this.
+	var streamState *terminal.PrePanicwrapState
+	if raw := os.Getenv(envTerminalPanicwrapWorkaround); raw != "" {
+		streamState = &terminal.PrePanicwrapState{}
+		if _, err := fmt.Sscanf(raw, "%t:%d", &streamState.StderrIsTerminal, &streamState.StderrWidth); err != nil {
+			log.Printf("[WARN] %s is set but is incorrectly-formatted: %s", envTerminalPanicwrapWorkaround, err)
+			streamState = nil // leave it unset for a normal init, then
+		}
+	}
+	streams, err := terminal.ReinitInsidePanicwrap(streamState)
+	if err != nil {
+		Ui.Error(fmt.Sprintf("Failed to configure the terminal: %s", err))
+		return 1
+	}
+	if streams.Stdout.IsTerminal() {
+		log.Printf("[TRACE] Stdout is a terminal of width %d", streams.Stdout.Columns())
+	} else {
+		log.Printf("[TRACE] Stdout is not a terminal")
+	}
+	if streams.Stderr.IsTerminal() {
+		log.Printf("[TRACE] Stderr is a terminal of width %d", streams.Stderr.Columns())
+	} else {
+		log.Printf("[TRACE] Stderr is not a terminal")
+	}
+	if streams.Stdin.IsTerminal() {
+		log.Printf("[TRACE] Stdin is a terminal")
+	} else {
+		log.Printf("[TRACE] Stdin is not a terminal")
+	}
 
 	// NOTE: We're intentionally calling LoadConfig _before_ handling a possible
 	// -chdir=... option on the command line, so that a possible relative
@@ -231,7 +291,7 @@ func wrappedMain() int {
 		// in case they need to refer back to it for any special reason, though
 		// they should primarily be working with the override working directory
 		// that we've now switched to above.
-		initCommands(originalWd, config, services, providerSrc, providerDevOverrides, unmanagedProviders)
+		initCommands(originalWd, streams, config, services, providerSrc, providerDevOverrides, unmanagedProviders)
 	}
 
 	// Run checkpoint
@@ -290,72 +350,54 @@ func wrappedMain() int {
 		AutocompleteUninstall: "uninstall-autocomplete",
 	}
 
+	// Before we continue we'll check whether the requested command is
+	// actually known. If not, we might be able to suggest an alternative
+	// if it seems like the user made a typo.
+	// (This bypasses the built-in help handling in cli.CLI for the situation
+	// where a command isn't found, because it's likely more helpful to
+	// mention what specifically went wrong, rather than just printing out
+	// a big block of usage information.)
+
+	// Check if this is being run via shell auto-complete, which uses the
+	// binary name as the first argument and won't be listed as a subcommand.
+	autoComplete := os.Getenv("COMP_LINE") != ""
+
+	if cmd := cliRunner.Subcommand(); cmd != "" && !autoComplete {
+		// Due to the design of cli.CLI, this special error message only works
+		// for typos of top-level commands. For a subcommand typo, like
+		// "terraform state posh", cmd would be "state" here and thus would
+		// be considered to exist, and it would print out its own usage message.
+		if _, exists := Commands[cmd]; !exists {
+			suggestions := make([]string, 0, len(Commands))
+			for name := range Commands {
+				suggestions = append(suggestions, name)
+			}
+			suggestion := didyoumean.NameSuggestion(cmd, suggestions)
+			if suggestion != "" {
+				suggestion = fmt.Sprintf(" Did you mean %q?", suggestion)
+			}
+			fmt.Fprintf(os.Stderr, "Terraform has no command named %q.%s\n\nTo see all of Terraform's top-level commands, run:\n  terraform -help\n\n", cmd, suggestion)
+			return 1
+		}
+	}
+
 	exitCode, err := cliRunner.Run()
 	if err != nil {
 		Ui.Error(fmt.Sprintf("Error executing CLI: %s", err.Error()))
 		return 1
 	}
 
+	// if we are exiting with a non-zero code, check if it was caused by any
+	// plugins crashing
+	if exitCode != 0 {
+		for _, panicLog := range logging.PluginPanics() {
+			// we don't write this to Error, or else panicwrap will think this
+			// process panicked
+			Ui.Info(panicLog)
+		}
+	}
+
 	return exitCode
-}
-
-// copyOutput uses output prefixes to determine whether data on stdout
-// should go to stdout or stderr. This is due to panicwrap using stderr
-// as the log and error channel.
-func copyOutput(r io.Reader, doneCh chan<- struct{}) {
-	defer close(doneCh)
-
-	pr, err := prefixedio.NewReader(r)
-	if err != nil {
-		panic(err)
-	}
-
-	stderrR, err := pr.Prefix(ErrorPrefix)
-	if err != nil {
-		panic(err)
-	}
-	stdoutR, err := pr.Prefix(OutputPrefix)
-	if err != nil {
-		panic(err)
-	}
-	defaultR, err := pr.Prefix("")
-	if err != nil {
-		panic(err)
-	}
-
-	var stdout io.Writer = os.Stdout
-	var stderr io.Writer = os.Stderr
-
-	if runtime.GOOS == "windows" {
-		stdout = colorable.NewColorableStdout()
-		stderr = colorable.NewColorableStderr()
-
-		// colorable is not concurrency-safe when stdout and stderr are the
-		// same console, so we need to add some synchronization to ensure that
-		// we can't be concurrently writing to both stderr and stdout at
-		// once, or else we get intermingled writes that create gibberish
-		// in the console.
-		wrapped := synchronizedWriters(stdout, stderr)
-		stdout = wrapped[0]
-		stderr = wrapped[1]
-	}
-
-	var wg sync.WaitGroup
-	wg.Add(3)
-	go func() {
-		defer wg.Done()
-		io.Copy(stderr, stderrR)
-	}()
-	go func() {
-		defer wg.Done()
-		io.Copy(stdout, stdoutR)
-	}()
-	go func() {
-		defer wg.Done()
-		io.Copy(stdout, defaultR)
-	}()
-
-	wg.Wait()
 }
 
 func mergeEnvArgs(envName string, cmd string, args []string) ([]string, error) {

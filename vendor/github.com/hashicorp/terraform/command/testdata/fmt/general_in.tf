@@ -39,3 +39,15 @@ resource "foo_instance" /* ... */ "baz" {
     thingy = "${var.instance_type}"
   }
 }
+
+  provider "" {
+}
+
+locals {
+  name = "${contains(["foo"], var.my_var) ? "${var.my_var}-bar" :
+    contains(["baz"], var.my_var) ? "baz-${var.my_var}" :
+  file("ERROR: unsupported type ${var.my_var}")}"
+  wrapped = "${(var.my_var == null ? 1 :
+    var.your_var == null ? 2 :
+  3)}"
+}

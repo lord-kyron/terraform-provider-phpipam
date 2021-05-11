@@ -106,7 +106,7 @@ func loadProviderSchemas(schemas map[addrs.Provider]*ProviderSchema, config *con
 			// future calls.
 			schemas[fqn] = &ProviderSchema{}
 			diags = diags.Append(
-				fmt.Errorf("Failed to instantiate provider %q to obtain schema: %s", name, err),
+				fmt.Errorf("failed to instantiate provider %q to obtain schema: %s", name, err),
 			)
 			return
 		}
@@ -114,13 +114,13 @@ func loadProviderSchemas(schemas map[addrs.Provider]*ProviderSchema, config *con
 			provider.Close()
 		}()
 
-		resp := provider.GetSchema()
+		resp := provider.GetProviderSchema()
 		if resp.Diagnostics.HasErrors() {
 			// We'll put a stub in the map so we won't re-attempt this on
 			// future calls.
 			schemas[fqn] = &ProviderSchema{}
 			diags = diags.Append(
-				fmt.Errorf("Failed to retrieve schema from provider %q: %s", name, resp.Diagnostics.Err()),
+				fmt.Errorf("failed to retrieve schema from provider %q: %s", name, resp.Diagnostics.Err()),
 			)
 			return
 		}
@@ -142,6 +142,9 @@ func loadProviderSchemas(schemas map[addrs.Provider]*ProviderSchema, config *con
 		}
 
 		for t, r := range resp.ResourceTypes {
+			if err := r.Block.InternalValidate(); err != nil {
+				diags = diags.Append(fmt.Errorf(errProviderSchemaInvalid, name, "resource", t, err))
+			}
 			s.ResourceTypes[t] = r.Block
 			s.ResourceTypeSchemaVersions[t] = uint64(r.Version)
 			if r.Version < 0 {
@@ -152,6 +155,9 @@ func loadProviderSchemas(schemas map[addrs.Provider]*ProviderSchema, config *con
 		}
 
 		for t, d := range resp.DataSources {
+			if err := d.Block.InternalValidate(); err != nil {
+				diags = diags.Append(fmt.Errorf(errProviderSchemaInvalid, name, "data source", t, err))
+			}
 			s.DataSources[t] = d.Block
 			if d.Version < 0 {
 				// We're not using the version numbers here yet, but we'll check
@@ -200,14 +206,12 @@ func loadProvisionerSchemas(schemas map[string]*configschema.Block, config *conf
 			// future calls.
 			schemas[name] = &configschema.Block{}
 			diags = diags.Append(
-				fmt.Errorf("Failed to instantiate provisioner %q to obtain schema: %s", name, err),
+				fmt.Errorf("failed to instantiate provisioner %q to obtain schema: %s", name, err),
 			)
 			return
 		}
 		defer func() {
-			if closer, ok := provisioner.(ResourceProvisionerCloser); ok {
-				closer.Close()
-			}
+			provisioner.Close()
 		}()
 
 		resp := provisioner.GetSchema()
@@ -216,7 +220,7 @@ func loadProvisionerSchemas(schemas map[string]*configschema.Block, config *conf
 			// future calls.
 			schemas[name] = &configschema.Block{}
 			diags = diags.Append(
-				fmt.Errorf("Failed to retrieve schema from provisioner %q: %s", name, resp.Diagnostics.Err()),
+				fmt.Errorf("failed to retrieve schema from provisioner %q: %s", name, resp.Diagnostics.Err()),
 			)
 			return
 		}
@@ -277,9 +281,10 @@ func (ps *ProviderSchema) SchemaForResourceAddr(addr addrs.Resource) (schema *co
 	return ps.SchemaForResourceType(addr.Mode, addr.Type)
 }
 
-// ProviderSchemaRequest is used to describe to a ResourceProvider which
-// aspects of schema are required, when calling the GetSchema method.
-type ProviderSchemaRequest struct {
-	ResourceTypes []string
-	DataSources   []string
-}
+const errProviderSchemaInvalid = `
+Internal validation of the provider failed! This is always a bug with the 
+provider itself, and not a user issue. Please report this bug to the 
+maintainers of the %q provider:
+
+%s %s: %s
+`

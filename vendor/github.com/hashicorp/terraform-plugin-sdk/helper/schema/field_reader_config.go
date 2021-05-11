@@ -7,8 +7,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/hashicorp/terraform-plugin-sdk/terraform"
 	"github.com/mitchellh/mapstructure"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
 )
 
 // ConfigFieldReader reads fields out of an untyped map[string]string to the
@@ -81,31 +82,16 @@ func (r *ConfigFieldReader) readField(
 	k := strings.Join(address, ".")
 	schema := schemaList[len(schemaList)-1]
 
-	// If we're getting the single element of a promoted list, then
-	// check to see if we have a single element we need to promote.
-	if address[len(address)-1] == "0" && len(schemaList) > 1 {
-		lastSchema := schemaList[len(schemaList)-2]
-		if lastSchema.Type == TypeList && lastSchema.PromoteSingle {
-			k := strings.Join(address[:len(address)-1], ".")
-			result, err := r.readPrimitive(k, schema)
-			if err == nil {
-				return result, nil
-			}
-		}
-	}
-
-	if protoVersion5 {
-		switch schema.Type {
-		case TypeList, TypeSet, TypeMap, typeObject:
-			// Check if the value itself is unknown.
-			// The new protocol shims will add unknown values to this list of
-			// ComputedKeys. This is the only way we have to indicate that a
-			// collection is unknown in the config
-			for _, unknown := range r.Config.ComputedKeys {
-				if k == unknown {
-					log.Printf("[DEBUG] setting computed for %q from ComputedKeys", k)
-					return FieldReadResult{Computed: true, Exists: true}, nil
-				}
+	switch schema.Type {
+	case TypeList, TypeSet, TypeMap, typeObject:
+		// Check if the value itself is unknown.
+		// The new protocol shims will add unknown values to this list of
+		// ComputedKeys. This is the only way we have to indicate that a
+		// collection is unknown in the config
+		for _, unknown := range r.Config.ComputedKeys {
+			if k == unknown {
+				log.Printf("[DEBUG] setting computed for %q from ComputedKeys", k)
+				return FieldReadResult{Computed: true, Exists: true}, nil
 			}
 		}
 	}
@@ -114,17 +100,6 @@ func (r *ConfigFieldReader) readField(
 	case TypeBool, TypeFloat, TypeInt, TypeString:
 		return r.readPrimitive(k, schema)
 	case TypeList:
-		// If we support promotion then we first check if we have a lone
-		// value that we must promote.
-		// a value that is alone.
-		if schema.PromoteSingle {
-			result, err := r.readPrimitive(k, schema.Elem.(*Schema))
-			if err == nil && result.Exists {
-				result.Value = []interface{}{result.Value}
-				return result, nil
-			}
-		}
-
 		return readListField(&nestedConfigFieldReader{r}, address, schema)
 	case TypeMap:
 		return r.readMap(k, schema)

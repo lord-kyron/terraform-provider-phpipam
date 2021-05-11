@@ -45,9 +45,6 @@ type Remote struct {
 	CLI      cli.Ui
 	CLIColor *colorstring.Colorize
 
-	// ShowDiagnostics prints diagnostic messages to the UI.
-	ShowDiagnostics func(vals ...interface{})
-
 	// ContextOpts are the base context options to set when initializing a
 	// new Terraform context. Many of these will be overridden or merged by
 	// Operation. See Operation for more details.
@@ -85,6 +82,12 @@ type Remote struct {
 
 	// opLock locks operations
 	opLock sync.Mutex
+
+	// ignoreVersionConflict, if true, will disable the requirement that the
+	// local Terraform version matches the remote workspace's configured
+	// version. This will also cause VerifyWorkspaceTerraformVersion to return
+	// a warning diagnostic instead of an error.
+	ignoreVersionConflict bool
 }
 
 var _ backend.Backend = (*Remote)(nil)
@@ -629,6 +632,20 @@ func (b *Remote) StateMgr(name string) (statemgr.Full, error) {
 		}
 	}
 
+	// This is a fallback error check. Most code paths should use other
+	// mechanisms to check the version, then set the ignoreVersionConflict
+	// field to true. This check is only in place to ensure that we don't
+	// accidentally upgrade state with a new code path, and the version check
+	// logic is coarser and simpler.
+	if !b.ignoreVersionConflict {
+		wsv := workspace.TerraformVersion
+		// Explicitly ignore the pseudo-version "latest" here, as it will cause
+		// plan and apply to always fail.
+		if wsv != tfversion.String() && wsv != "latest" {
+			return nil, fmt.Errorf("Remote workspace Terraform version %q does not match local Terraform version %q", workspace.TerraformVersion, tfversion.String())
+		}
+	}
+
 	client := &remoteClient{
 		client:       b.client,
 		organization: b.organization,
@@ -674,8 +691,22 @@ func (b *Remote) Operation(ctx context.Context, op *backend.Operation) (*backend
 		}
 	}
 
+	// Terraform remote version conflicts are not a concern for operations. We
+	// are in one of three states:
+	//
+	// - Running remotely, in which case the local version is irrelevant;
+	// - Workspace configured for local operations, in which case the remote
+	//   version is meaningless;
+	// - Forcing local operations with a remote backend, which should only
+	//   happen in the Terraform Cloud worker, in which case the Terraform
+	//   versions by definition match.
+	b.IgnoreVersionConflict()
+
 	// Check if we need to use the local backend to run the operation.
 	if b.forceLocal || !w.Operations {
+		// Record that we're forced to run operations locally to allow the
+		// command package UI to operate correctly
+		b.forceLocal = true
 		return b.local.Operation(ctx, op)
 	}
 
@@ -724,7 +755,9 @@ func (b *Remote) Operation(ctx context.Context, op *backend.Operation) (*backend
 
 		r, opErr := f(stopCtx, cancelCtx, op, w)
 		if opErr != nil && opErr != context.Canceled {
-			b.ReportResult(runningOp, opErr)
+			var diags tfdiags.Diagnostics
+			diags = diags.Append(opErr)
+			op.ReportResult(runningOp, diags)
 			return
 		}
 
@@ -737,7 +770,9 @@ func (b *Remote) Operation(ctx context.Context, op *backend.Operation) (*backend
 			// Retrieve the run to get its current status.
 			r, err := b.client.Runs.Read(cancelCtx, r.ID)
 			if err != nil {
-				b.ReportResult(runningOp, generalError("Failed to retrieve run", err))
+				var diags tfdiags.Diagnostics
+				diags = diags.Append(generalError("Failed to retrieve run", err))
+				op.ReportResult(runningOp, diags)
 				return
 			}
 
@@ -746,7 +781,9 @@ func (b *Remote) Operation(ctx context.Context, op *backend.Operation) (*backend
 
 			if opErr == context.Canceled {
 				if err := b.cancel(cancelCtx, op, r); err != nil {
-					b.ReportResult(runningOp, generalError("Failed to retrieve run", err))
+					var diags tfdiags.Diagnostics
+					diags = diags.Append(generalError("Failed to retrieve run", err))
+					op.ReportResult(runningOp, diags)
 					return
 				}
 			}
@@ -800,41 +837,123 @@ func (b *Remote) cancel(cancelCtx context.Context, op *backend.Operation, r *tfe
 	return nil
 }
 
-// ReportResult is a helper for the common chore of setting the status of
-// a running operation and showing any diagnostics produced during that
-// operation.
+// IgnoreVersionConflict allows commands to disable the fall-back check that
+// the local Terraform version matches the remote workspace's configured
+// Terraform version. This should be called by commands where this check is
+// unnecessary, such as those performing remote operations, or read-only
+// operations. It will also be called if the user uses a command-line flag to
+// override this check.
+func (b *Remote) IgnoreVersionConflict() {
+	b.ignoreVersionConflict = true
+}
+
+// VerifyWorkspaceTerraformVersion compares the local Terraform version against
+// the workspace's configured Terraform version. If they are equal, this means
+// that there are no compatibility concerns, so it returns no diagnostics.
 //
-// If the given diagnostics contains errors then the operation's result
-// will be set to backend.OperationFailure. It will be set to
-// backend.OperationSuccess otherwise. It will then use b.ShowDiagnostics
-// to show the given diagnostics before returning.
-//
-// Callers should feel free to do each of these operations separately in
-// more complex cases where e.g. diagnostics are interleaved with other
-// output, but terminating immediately after reporting error diagnostics is
-// common and can be expressed concisely via this method.
-func (b *Remote) ReportResult(op *backend.RunningOperation, err error) {
+// If the versions differ,
+func (b *Remote) VerifyWorkspaceTerraformVersion(workspaceName string) tfdiags.Diagnostics {
 	var diags tfdiags.Diagnostics
 
-	diags = diags.Append(err)
-	if diags.HasErrors() {
-		op.Result = backend.OperationFailure
-	} else {
-		op.Result = backend.OperationSuccess
+	workspace, err := b.getRemoteWorkspace(context.Background(), workspaceName)
+	if err != nil {
+		// If the workspace doesn't exist, there can be no compatibility
+		// problem, so we can return. This is most likely to happen when
+		// migrating state from a local backend to a new workspace.
+		if err == tfe.ErrResourceNotFound {
+			return nil
+		}
+
+		diags = diags.Append(tfdiags.Sourceless(
+			tfdiags.Error,
+			"Error looking up workspace",
+			fmt.Sprintf("Workspace read failed: %s", err),
+		))
+		return diags
 	}
 
-	if b.ShowDiagnostics != nil {
-		b.ShowDiagnostics(diags)
-	} else {
-		// Shouldn't generally happen, but if it does then we'll at least
-		// make some noise in the logs to help us spot it.
-		if len(diags) != 0 {
-			log.Printf(
-				"[ERROR] Remote backend needs to report diagnostics but ShowDiagnostics is not set:\n%s",
-				diags.ErrWithWarnings(),
-			)
+	// If the workspace has the pseudo-version "latest", all bets are off. We
+	// cannot reasonably determine what the intended Terraform version is, so
+	// we'll skip version verification.
+	if workspace.TerraformVersion == "latest" {
+		return nil
+	}
+
+	// If the workspace has remote operations disabled, the remote Terraform
+	// version is effectively meaningless, so we'll skip version verification.
+	if workspace.Operations == false {
+		return nil
+	}
+
+	remoteVersion, err := version.NewSemver(workspace.TerraformVersion)
+	if err != nil {
+		diags = diags.Append(tfdiags.Sourceless(
+			tfdiags.Error,
+			"Error looking up workspace",
+			fmt.Sprintf("Invalid Terraform version: %s", err),
+		))
+		return diags
+	}
+
+	v014 := version.Must(version.NewSemver("0.14.0"))
+	if tfversion.SemVer.LessThan(v014) || remoteVersion.LessThan(v014) {
+		// Versions of Terraform prior to 0.14.0 will refuse to load state files
+		// written by a newer version of Terraform, even if it is only a patch
+		// level difference. As a result we require an exact match.
+		if tfversion.SemVer.Equal(remoteVersion) {
+			return diags
 		}
 	}
+	if tfversion.SemVer.GreaterThanOrEqual(v014) && remoteVersion.GreaterThanOrEqual(v014) {
+		// Versions of Terraform after 0.14.0 should be compatible with each
+		// other.  At the time this code was written, the only constraints we
+		// are aware of are:
+		//
+		// - 0.14.0 is guaranteed to be compatible with versions up to but not
+		//   including 1.1.0
+		v110 := version.Must(version.NewSemver("1.1.0"))
+		if tfversion.SemVer.LessThan(v110) && remoteVersion.LessThan(v110) {
+			return diags
+		}
+		// - Any new Terraform state version will require at least minor patch
+		//   increment, so x.y.* will always be compatible with each other
+		tfvs := tfversion.SemVer.Segments64()
+		rwvs := remoteVersion.Segments64()
+		if len(tfvs) == 3 && len(rwvs) == 3 && tfvs[0] == rwvs[0] && tfvs[1] == rwvs[1] {
+			return diags
+		}
+	}
+
+	// Even if ignoring version conflicts, it may still be useful to call this
+	// method and warn the user about a mismatch between the local and remote
+	// Terraform versions.
+	severity := tfdiags.Error
+	if b.ignoreVersionConflict {
+		severity = tfdiags.Warning
+	}
+
+	suggestion := " If you're sure you want to upgrade the state, you can force Terraform to continue using the -ignore-remote-version flag. This may result in an unusable workspace."
+	if b.ignoreVersionConflict {
+		suggestion = ""
+	}
+	diags = diags.Append(tfdiags.Sourceless(
+		severity,
+		"Terraform version mismatch",
+		fmt.Sprintf(
+			"The local Terraform version (%s) does not match the configured version for remote workspace %s/%s (%s).%s",
+			tfversion.String(),
+			b.organization,
+			workspace.Name,
+			workspace.TerraformVersion,
+			suggestion,
+		),
+	))
+
+	return diags
+}
+
+func (b *Remote) IsLocalOperations() bool {
+	return b.forceLocal
 }
 
 // Colorize returns the Colorize structure that can be used for colorizing

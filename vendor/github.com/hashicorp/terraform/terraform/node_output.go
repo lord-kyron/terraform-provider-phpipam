@@ -246,11 +246,10 @@ func (n *NodeApplyableOutput) References() []*addrs.Reference {
 }
 
 // GraphNodeExecutable
-func (n *NodeApplyableOutput) Execute(ctx EvalContext, op walkOperation) error {
-	var diags tfdiags.Diagnostics
+func (n *NodeApplyableOutput) Execute(ctx EvalContext, op walkOperation) (diags tfdiags.Diagnostics) {
 	state := ctx.State()
 	if state == nil {
-		return nil
+		return
 	}
 
 	changes := ctx.Changes() // may be nil, if we're not working on a changeset
@@ -276,16 +275,24 @@ func (n *NodeApplyableOutput) Execute(ctx EvalContext, op walkOperation) error {
 		// depends_on expressions here too
 		diags = diags.Append(validateDependsOn(ctx, n.Config.DependsOn))
 
-		// Ensure that non-sensitive outputs don't include sensitive values
+		// For root module outputs in particular, an output value must be
+		// statically declared as sensitive in order to dynamically return
+		// a sensitive result, to help avoid accidental exposure in the state
+		// of a sensitive value that the user doesn't want to include there.
 		_, marks := val.UnmarkDeep()
 		_, hasSensitive := marks["sensitive"]
-		if !n.Config.Sensitive && hasSensitive {
-			diags = diags.Append(&hcl.Diagnostic{
-				Severity: hcl.DiagError,
-				Summary:  "Output refers to sensitive values",
-				Detail:   "Expressions used in outputs can only refer to sensitive values if the sensitive attribute is true.",
-				Subject:  n.Config.DeclRange.Ptr(),
-			})
+		if n.Addr.Module.IsRoot() {
+			if !n.Config.Sensitive && hasSensitive {
+				diags = diags.Append(&hcl.Diagnostic{
+					Severity: hcl.DiagError,
+					Summary:  "Output refers to sensitive values",
+					Detail: `To reduce the risk of accidentally exporting sensitive data that was intended to be only internal, Terraform requires that any root module output containing sensitive data be explicitly marked as sensitive, to confirm your intent.
+
+If you do intend to export this data, annotate the output value as sensitive by adding the following argument:
+    sensitive = true`,
+					Subject: n.Config.DeclRange.Ptr(),
+				})
+			}
 		}
 	}
 
@@ -297,9 +304,24 @@ func (n *NodeApplyableOutput) Execute(ctx EvalContext, op walkOperation) error {
 			// marked as unknown. If the evaluator was able to find a type
 			// for the value in spite of the error then we'll use it.
 			n.setValue(state, changes, cty.UnknownVal(val.Type()))
-			return EvalEarlyExitError{}
+
+			// Keep existing warnings, while converting errors to warnings.
+			// This is not meant to be the normal path, so there no need to
+			// make the errors pretty.
+			var warnings tfdiags.Diagnostics
+			for _, d := range diags {
+				switch d.Severity() {
+				case tfdiags.Warning:
+					warnings = warnings.Append(d)
+				case tfdiags.Error:
+					desc := d.Description()
+					warnings = warnings.Append(tfdiags.SimpleWarning(fmt.Sprintf("%s:%s", desc.Summary, desc.Detail)))
+				}
+			}
+
+			return warnings
 		}
-		return diags.Err()
+		return diags
 	}
 	n.setValue(state, changes, val)
 
@@ -309,7 +331,7 @@ func (n *NodeApplyableOutput) Execute(ctx EvalContext, op walkOperation) error {
 		n.setValue(state, changes, val)
 	}
 
-	return nil
+	return diags
 }
 
 // dag.GraphNodeDotter impl.
@@ -350,7 +372,7 @@ func (n *NodeDestroyableOutput) temporaryValue() bool {
 }
 
 // GraphNodeExecutable
-func (n *NodeDestroyableOutput) Execute(ctx EvalContext, op walkOperation) error {
+func (n *NodeDestroyableOutput) Execute(ctx EvalContext, op walkOperation) tfdiags.Diagnostics {
 	state := ctx.State()
 	if state == nil {
 		return nil
@@ -418,12 +440,17 @@ func (n *NodeApplyableOutput) setValue(state *states.SyncState, changes *plans.C
 		// the diff
 		sensitiveBefore := false
 		before := cty.NullVal(cty.DynamicPseudoType)
+
+		// is this output new to our state?
+		newOutput := true
+
 		mod := state.Module(n.Addr.Module)
 		if n.Addr.Module.IsRoot() && mod != nil {
 			for name, o := range mod.OutputValues {
 				if name == n.Addr.OutputValue.Name {
 					before = o.Value
 					sensitiveBefore = o.Sensitive
+					newOutput = false
 					break
 				}
 			}
@@ -435,27 +462,27 @@ func (n *NodeApplyableOutput) setValue(state *states.SyncState, changes *plans.C
 		sensitiveChange := sensitiveBefore || n.Config.Sensitive
 
 		// strip any marks here just to be sure we don't panic on the True comparison
-		val, _ = val.UnmarkDeep()
+		unmarkedVal, _ := val.UnmarkDeep()
 
-		var action plans.Action
+		action := plans.Update
 		switch {
-		case val.IsNull():
-			action = plans.Delete
+		case val.IsNull() && before.IsNull():
+			// This is separate from the NoOp case below, since we can ignore
+			// sensitivity here when there are only null values.
+			action = plans.NoOp
 
-		case before.IsNull():
+		case newOutput:
+			// This output was just added to the configuration
 			action = plans.Create
 
 		case val.IsWhollyKnown() &&
-			val.Equals(before).True() &&
+			unmarkedVal.Equals(before).True() &&
 			n.Config.Sensitive == sensitiveBefore:
 			// Sensitivity must also match to be a NoOp.
 			// Theoretically marks may not match here, but sensitivity is the
 			// only one we can act on, and the state will have been loaded
 			// without any marks to consider.
 			action = plans.NoOp
-
-		default:
-			action = plans.Update
 		}
 
 		change := &plans.OutputChange{
@@ -473,7 +500,7 @@ func (n *NodeApplyableOutput) setValue(state *states.SyncState, changes *plans.C
 			// Should never happen, since we just constructed this right above
 			panic(fmt.Sprintf("planned change for %s could not be encoded: %s", n.Addr, err))
 		}
-		log.Printf("[TRACE] ExecuteWriteOutput: Saving %s change for %s in changeset", change.Action, n.Addr)
+		log.Printf("[TRACE] setValue: Saving %s change for %s in changeset", change.Action, n.Addr)
 		changes.RemoveOutputChange(n.Addr) // remove any existing planned change, if present
 		changes.AppendOutputChange(cs)     // add the new planned change
 	}
@@ -482,12 +509,12 @@ func (n *NodeApplyableOutput) setValue(state *states.SyncState, changes *plans.C
 		// The state itself doesn't represent unknown values, so we null them
 		// out here and then we'll save the real unknown value in the planned
 		// changeset below, if we have one on this graph walk.
-		log.Printf("[TRACE] EvalWriteOutput: Saving value for %s in state", n.Addr)
+		log.Printf("[TRACE] setValue: Saving value for %s in state", n.Addr)
 		unmarkedVal, _ := val.UnmarkDeep()
 		stateVal := cty.UnknownAsNull(unmarkedVal)
 		state.SetOutputValue(n.Addr, stateVal, n.Config.Sensitive)
 	} else {
-		log.Printf("[TRACE] EvalWriteOutput: Removing %s from state (it is now null)", n.Addr)
+		log.Printf("[TRACE] setValue: Removing %s from state (it is now null)", n.Addr)
 		state.RemoveOutputValue(n.Addr)
 	}
 

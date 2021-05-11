@@ -53,6 +53,9 @@ func (c *StateShowCommand) Run(args []string) int {
 		return 1
 	}
 
+	// This is a read-only command
+	c.ignoreRemoteBackendVersionConflict(b)
+
 	// Check if the address can be parsed
 	addr, addrDiags := addrs.ParseAbsResourceInstanceStr(args[0])
 	if addrDiags.HasErrors() {
@@ -106,7 +109,7 @@ func (c *StateShowCommand) Run(args []string) int {
 
 	state := stateMgr.State()
 	if state == nil {
-		c.Ui.Error(fmt.Sprintf(errStateNotFound))
+		c.Ui.Error(errStateNotFound)
 		return 1
 	}
 
@@ -142,7 +145,7 @@ func (c *StateShowCommand) Run(args []string) int {
 
 func (c *StateShowCommand) Help() string {
 	helpText := `
-Usage: terraform state show [options] ADDRESS
+Usage: terraform [global options] state show [options] ADDRESS
 
   Shows the attributes of a resource in the Terraform state.
 

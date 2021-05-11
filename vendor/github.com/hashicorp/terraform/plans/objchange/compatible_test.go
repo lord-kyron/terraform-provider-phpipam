@@ -30,10 +30,6 @@ func TestAssertObjectCompatible(t *testing.T) {
 		"foo": cty.StringVal("bar"),
 		"bar": cty.NullVal(cty.String), // simulating the situation where bar isn't set in the config at all
 	})
-	fooBarBlockDynamicPlaceholder := cty.ObjectVal(map[string]cty.Value{
-		"foo": cty.UnknownVal(cty.String),
-		"bar": cty.NullVal(cty.String), // simulating the situation where bar isn't set in the config at all
-	})
 
 	tests := []struct {
 		Schema   *configschema.Block
@@ -195,6 +191,49 @@ func TestAssertObjectCompatible(t *testing.T) {
 			},
 		},
 		{
+			// This tests the codepath that leads to couldHaveUnknownBlockPlaceholder,
+			// where a set may be sensitive and need to be unmarked before it
+			// is iterated upon
+			&configschema.Block{
+				BlockTypes: map[string]*configschema.NestedBlock{
+					"configuration": {
+						Nesting: configschema.NestingList,
+						Block: configschema.Block{
+							BlockTypes: map[string]*configschema.NestedBlock{
+								"sensitive_fields": {
+									Nesting: configschema.NestingSet,
+									Block:   schemaWithFoo,
+								},
+							},
+						},
+					},
+				},
+			},
+			cty.ObjectVal(map[string]cty.Value{
+				"configuration": cty.TupleVal([]cty.Value{
+					cty.ObjectVal(map[string]cty.Value{
+						"sensitive_fields": cty.SetVal([]cty.Value{
+							cty.ObjectVal(map[string]cty.Value{
+								"foo": cty.StringVal("secret"),
+							}),
+						}).Mark("sensitive"),
+					}),
+				}),
+			}),
+			cty.ObjectVal(map[string]cty.Value{
+				"configuration": cty.TupleVal([]cty.Value{
+					cty.ObjectVal(map[string]cty.Value{
+						"sensitive_fields": cty.SetVal([]cty.Value{
+							cty.ObjectVal(map[string]cty.Value{
+								"foo": cty.StringVal("secret"),
+							}),
+						}).Mark("sensitive"),
+					}),
+				}),
+			}),
+			nil,
+		},
+		{
 			&configschema.Block{
 				Attributes: map[string]*configschema.Attribute{
 					"id": {
@@ -214,6 +253,28 @@ func TestAssertObjectCompatible(t *testing.T) {
 			cty.ObjectVal(map[string]cty.Value{
 				"id":    cty.UnknownVal(cty.String),
 				"stuff": cty.StringVal("thingy"),
+			}),
+			[]string{},
+		},
+		{
+			&configschema.Block{
+				Attributes: map[string]*configschema.Attribute{
+					"obj": {
+						Type: cty.Object(map[string]cty.Type{
+							"stuff": cty.DynamicPseudoType,
+						}),
+					},
+				},
+			},
+			cty.ObjectVal(map[string]cty.Value{
+				"obj": cty.ObjectVal(map[string]cty.Value{
+					"stuff": cty.DynamicVal,
+				}),
+			}),
+			cty.ObjectVal(map[string]cty.Value{
+				"obj": cty.ObjectVal(map[string]cty.Value{
+					"stuff": cty.NumberIntVal(3),
+				}),
 			}),
 			[]string{},
 		},
@@ -854,13 +915,11 @@ func TestAssertObjectCompatible(t *testing.T) {
 					},
 				},
 			},
-			cty.ObjectVal(map[string]cty.Value{
-				"key": cty.ObjectVal(map[string]cty.Value{
-					// One wholly unknown block is what "dynamic" blocks
-					// generate when the for_each expression is unknown.
-					"foo": cty.UnknownVal(cty.String),
+			cty.UnknownVal(cty.Object(map[string]cty.Type{
+				"key": cty.Object(map[string]cty.Type{
+					"foo": cty.String,
 				}),
-			}),
+			})),
 			cty.ObjectVal(map[string]cty.Value{
 				"key": cty.NullVal(cty.Object(map[string]cty.Type{
 					"foo": cty.String,
@@ -946,11 +1005,9 @@ func TestAssertObjectCompatible(t *testing.T) {
 					},
 				},
 			},
-			cty.ObjectVal(map[string]cty.Value{
-				"key": cty.ListVal([]cty.Value{
-					fooBarBlockDynamicPlaceholder, // the presence of this disables some of our checks
-				}),
-			}),
+			cty.UnknownVal(cty.Object(map[string]cty.Type{
+				"key": cty.List(fooBarBlockValue.Type()),
+			})),
 			cty.ObjectVal(map[string]cty.Value{
 				"key": cty.ListVal([]cty.Value{
 					cty.ObjectVal(map[string]cty.Value{
@@ -961,35 +1018,7 @@ func TestAssertObjectCompatible(t *testing.T) {
 					}),
 				}),
 			}),
-			nil, // a single block whose attrs are all unknown is allowed to expand into multiple, because that's how dynamic blocks behave when for_each is unknown
-		},
-		{
-			&configschema.Block{
-				BlockTypes: map[string]*configschema.NestedBlock{
-					"key": {
-						Nesting: configschema.NestingList,
-						Block:   schemaWithFooBar,
-					},
-				},
-			},
-			cty.ObjectVal(map[string]cty.Value{
-				"key": cty.ListVal([]cty.Value{
-					fooBarBlockValue,              // the presence of one static block does not negate that the following element looks like a dynamic placeholder
-					fooBarBlockDynamicPlaceholder, // the presence of this disables some of our checks
-				}),
-			}),
-			cty.ObjectVal(map[string]cty.Value{
-				"key": cty.ListVal([]cty.Value{
-					fooBlockValue,
-					cty.ObjectVal(map[string]cty.Value{
-						"foo": cty.StringVal("hello"),
-					}),
-					cty.ObjectVal(map[string]cty.Value{
-						"foo": cty.StringVal("world"),
-					}),
-				}),
-			}),
-			nil, // as above, the presence of a block whose attrs are all unknown indicates dynamic block expansion, so our usual count checks don't apply
+			nil, // an unknown block is allowed to expand into multiple, because that's how dynamic blocks behave when for_each is unknown
 		},
 		{
 			&configschema.Block{
@@ -1130,14 +1159,11 @@ func TestAssertObjectCompatible(t *testing.T) {
 				},
 			},
 			cty.ObjectVal(map[string]cty.Value{
-				"block": cty.SetVal([]cty.Value{
-					cty.ObjectVal(map[string]cty.Value{
-						"foo": cty.UnknownVal(cty.String),
+				"block": cty.UnknownVal(cty.Set(
+					cty.Object(map[string]cty.Type{
+						"foo": cty.String,
 					}),
-					cty.ObjectVal(map[string]cty.Value{
-						"foo": cty.UnknownVal(cty.String),
-					}),
-				}),
+				)),
 			}),
 			cty.ObjectVal(map[string]cty.Value{
 				"block": cty.SetVal([]cty.Value{
@@ -1149,47 +1175,6 @@ func TestAssertObjectCompatible(t *testing.T) {
 					}),
 					cty.ObjectVal(map[string]cty.Value{
 						"foo": cty.StringVal("nope"),
-					}),
-				}),
-			}),
-			// there is no error here, because the presence of unknowns
-			// indicates this may be a dynamic block, and the length is unknown
-			nil,
-		},
-		{
-			&configschema.Block{
-				BlockTypes: map[string]*configschema.NestedBlock{
-					"block": {
-						Nesting: configschema.NestingSet,
-						Block:   schemaWithFooBar,
-					},
-				},
-			},
-			// The legacy SDK cannot handle missing strings in sets, and will
-			// insert empty strings to the planned value. Empty strings should
-			// be handled as nulls, and this object should represent a possible
-			// dynamic block.
-			cty.ObjectVal(map[string]cty.Value{
-				"block": cty.SetVal([]cty.Value{
-					cty.ObjectVal(map[string]cty.Value{
-						"foo": cty.UnknownVal(cty.String),
-						"bar": cty.StringVal(""),
-					}),
-				}),
-			}),
-			cty.ObjectVal(map[string]cty.Value{
-				"block": cty.SetVal([]cty.Value{
-					cty.ObjectVal(map[string]cty.Value{
-						"foo": cty.StringVal("hello"),
-						"bar": cty.StringVal(""),
-					}),
-					cty.ObjectVal(map[string]cty.Value{
-						"foo": cty.StringVal("world"),
-						"bar": cty.StringVal(""),
-					}),
-					cty.ObjectVal(map[string]cty.Value{
-						"foo": cty.StringVal("nope"),
-						"bar": cty.StringVal(""),
 					}),
 				}),
 			}),
@@ -1270,11 +1255,7 @@ func TestAssertObjectCompatible(t *testing.T) {
 				},
 			},
 			cty.ObjectVal(map[string]cty.Value{
-				"block": cty.SetVal([]cty.Value{
-					cty.ObjectVal(map[string]cty.Value{
-						"foo": cty.UnknownVal(cty.String),
-					}),
-				}),
+				"block": cty.UnknownVal(cty.Set(fooBlockValue.Type())),
 			}),
 			cty.ObjectVal(map[string]cty.Value{
 				"block": cty.SetVal([]cty.Value{
@@ -1299,11 +1280,7 @@ func TestAssertObjectCompatible(t *testing.T) {
 				},
 			},
 			cty.ObjectVal(map[string]cty.Value{
-				"block2": cty.SetVal([]cty.Value{
-					cty.ObjectVal(map[string]cty.Value{
-						"foo": cty.UnknownVal(cty.String),
-					}),
-				}),
+				"block2": cty.UnknownVal(cty.Set(fooBlockValue.Type())),
 			}),
 			cty.ObjectVal(map[string]cty.Value{
 				"block2": cty.SetValEmpty(cty.Object(map[string]cty.Type{
@@ -1336,37 +1313,6 @@ func TestAssertObjectCompatible(t *testing.T) {
 				"block3": cty.SetVal([]cty.Value{
 					cty.ObjectVal(map[string]cty.Value{
 						"foo": cty.StringVal("a"),
-					}),
-				}),
-			}),
-			nil,
-		},
-		{
-			&configschema.Block{
-				BlockTypes: map[string]*configschema.NestedBlock{
-					"block": {
-						Nesting: configschema.NestingSet,
-						Block:   schemaWithFooBar,
-					},
-				},
-			},
-			cty.ObjectVal(map[string]cty.Value{
-				"block": cty.SetVal([]cty.Value{
-					cty.ObjectVal(map[string]cty.Value{
-						"foo": cty.UnknownVal(cty.String),
-						"bar": cty.NullVal(cty.String),
-					}),
-				}),
-			}),
-			cty.ObjectVal(map[string]cty.Value{
-				"block": cty.SetVal([]cty.Value{
-					cty.ObjectVal(map[string]cty.Value{
-						"foo": cty.StringVal("a"),
-						"bar": cty.StringVal(""),
-					}),
-					cty.ObjectVal(map[string]cty.Value{
-						"foo": cty.StringVal("b"),
-						"bar": cty.StringVal(""),
 					}),
 				}),
 			}),

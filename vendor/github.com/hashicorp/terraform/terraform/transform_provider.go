@@ -31,8 +31,6 @@ func TransformProviders(providers []string, concrete ConcreteProviderNodeFunc, c
 		},
 		// Remove unused providers and proxies
 		&PruneProviderTransformer{},
-		// Connect provider to their parent provider nodes
-		&ParentProviderTransformer{},
 	)
 }
 
@@ -67,6 +65,7 @@ type GraphNodeProviderConsumer interface {
 	// ProvidedBy returns the address of the provider configuration the node
 	// refers to, if available. The following value types may be returned:
 	//
+	//   nil + exact true: the node does not require a provider
 	// * addrs.LocalProviderConfig: the provider was set in the resource config
 	// * addrs.AbsProviderConfig + exact true: the provider configuration was
 	//   taken from the instance state.
@@ -111,9 +110,14 @@ func (t *ProviderTransformer) Transform(g *Graph) error {
 	for _, v := range g.Vertices() {
 		// Does the vertex _directly_ use a provider?
 		if pv, ok := v.(GraphNodeProviderConsumer); ok {
+			providerAddr, exact := pv.ProvidedBy()
+			if providerAddr == nil && exact {
+				// no provider is required
+				continue
+			}
+
 			requested[v] = make(map[string]ProviderRequest)
 
-			providerAddr, exact := pv.ProvidedBy()
 			var absPc addrs.AbsProviderConfig
 
 			switch p := providerAddr.(type) {
@@ -221,11 +225,10 @@ func (t *ProviderTransformer) Transform(g *Graph) error {
 				break
 			}
 
-			// see if this in  an inherited provider
+			// see if this is a proxy provider pointing to another concrete config
 			if p, ok := target.(*graphNodeProxyProvider); ok {
 				g.Remove(p)
 				target = p.Target()
-				key = target.(GraphNodeProvider).ProviderAddr().String()
 			}
 
 			log.Printf("[DEBUG] ProviderTransformer: %q (%T) needs %s", dag.VertexName(v), v, dag.VertexName(target))
@@ -250,8 +253,7 @@ func (t *CloseProviderTransformer) Transform(g *Graph) error {
 	cpm := make(map[string]*graphNodeCloseProvider)
 	var err error
 
-	for _, v := range pm {
-		p := v.(GraphNodeProvider)
+	for _, p := range pm {
 		key := p.ProviderAddr().String()
 
 		// get the close provider of this type if we alread created it
@@ -353,42 +355,6 @@ func (t *MissingProviderTransformer) Transform(g *Graph) error {
 	return err
 }
 
-// ParentProviderTransformer connects provider nodes to their parents.
-//
-// This works by finding nodes that are both GraphNodeProviders and
-// GraphNodeModuleInstance. It then connects the providers to their parent
-// path. The parent provider is always at the root level.
-type ParentProviderTransformer struct{}
-
-func (t *ParentProviderTransformer) Transform(g *Graph) error {
-	pm := providerVertexMap(g)
-	for _, v := range g.Vertices() {
-		// Only care about providers
-		pn, ok := v.(GraphNodeProvider)
-		if !ok {
-			continue
-		}
-
-		// Also require non-empty path, since otherwise we're in the root
-		// module and so cannot have a parent.
-		if len(pn.ModulePath()) <= 1 {
-			continue
-		}
-
-		// this provider may be disabled, but we can only get it's name from
-		// the ProviderName string
-		addr := pn.ProviderAddr()
-		parentAddr, ok := addr.Inherited()
-		if ok {
-			parent := pm[parentAddr.String()]
-			if parent != nil {
-				g.Connect(dag.BasicEdge(v, parent))
-			}
-		}
-	}
-	return nil
-}
-
 // PruneProviderTransformer removes any providers that are not actually used by
 // anything, and provider proxies. This avoids the provider being initialized
 // and configured.  This both saves resources but also avoids errors since
@@ -431,24 +397,13 @@ func providerVertexMap(g *Graph) map[string]GraphNodeProvider {
 	return m
 }
 
-func closeProviderVertexMap(g *Graph) map[string]GraphNodeCloseProvider {
-	m := make(map[string]GraphNodeCloseProvider)
-	for _, v := range g.Vertices() {
-		if pv, ok := v.(GraphNodeCloseProvider); ok {
-			addr := pv.CloseProviderAddr()
-			m[addr.String()] = pv
-		}
-	}
-
-	return m
-}
-
 type graphNodeCloseProvider struct {
 	Addr addrs.AbsProviderConfig
 }
 
 var (
 	_ GraphNodeCloseProvider = (*graphNodeCloseProvider)(nil)
+	_ GraphNodeExecutable    = (*graphNodeCloseProvider)(nil)
 )
 
 func (n *graphNodeCloseProvider) Name() string {
@@ -461,13 +416,8 @@ func (n *graphNodeCloseProvider) ModulePath() addrs.Module {
 }
 
 // GraphNodeExecutable impl.
-func (n *graphNodeCloseProvider) Execute(ctx EvalContext, op walkOperation) error {
-	return ctx.CloseProvider(n.Addr)
-}
-
-// GraphNodeDependable impl.
-func (n *graphNodeCloseProvider) DependableName() []string {
-	return []string{n.Name()}
+func (n *graphNodeCloseProvider) Execute(ctx EvalContext, op walkOperation) (diags tfdiags.Diagnostics) {
+	return diags.Append(ctx.CloseProvider(n.Addr))
 }
 
 func (n *graphNodeCloseProvider) CloseProviderAddr() addrs.AbsProviderConfig {
@@ -584,6 +534,37 @@ func (t *ProviderConfigTransformer) transformSingle(g *Graph, c *configs.Config)
 	mod := c.Module
 	path := c.Path
 
+	// If this is the root module, we can add nodes for required providers that
+	// have no configuration, equivalent to having an empty configuration
+	// block. This will ensure that a provider node exists for modules to
+	// access when passing around configuration and inheritance.
+	if path.IsRoot() && c.Module.ProviderRequirements != nil {
+		for name, p := range c.Module.ProviderRequirements.RequiredProviders {
+			if _, configured := mod.ProviderConfigs[name]; configured {
+				continue
+			}
+
+			addr := addrs.AbsProviderConfig{
+				Provider: p.Type,
+				Module:   path,
+			}
+
+			abstract := &NodeAbstractProvider{
+				Addr: addr,
+			}
+
+			var v dag.Vertex
+			if t.Concrete != nil {
+				v = t.Concrete(abstract)
+			} else {
+				v = abstract
+			}
+
+			g.Add(v)
+			t.providers[addr.String()] = v.(GraphNodeProvider)
+		}
+	}
+
 	// add all providers from the configuration
 	for _, p := range mod.ProviderConfigs {
 		fqn := mod.ProviderForLocalConfig(p.Addr())
@@ -608,13 +589,17 @@ func (t *ProviderConfigTransformer) transformSingle(g *Graph, c *configs.Config)
 		key := addr.String()
 		t.providers[key] = v.(GraphNodeProvider)
 
-		// A provider configuration is "proxyable" if its configuration is
-		// entirely empty. This means it's standing in for a provider
-		// configuration that must be passed in from the parent module.
-		// We decide this by evaluating the config with an empty schema;
-		// if this succeeds, then we know there's nothing in the body.
-		_, diags := p.Config.Content(&hcl.BodySchema{})
-		t.proxiable[key] = !diags.HasErrors()
+		// While deprecated, we still accept empty configuration blocks within
+		// modules as being a possible proxy for passed configuration.
+		if !path.IsRoot() {
+			// A provider configuration is "proxyable" if its configuration is
+			// entirely empty. This means it's standing in for a provider
+			// configuration that must be passed in from the parent module.
+			// We decide this by evaluating the config with an empty schema;
+			// if this succeeds, then we know there's nothing in the body.
+			_, diags := p.Config.Content(&hcl.BodySchema{})
+			t.proxiable[key] = !diags.HasErrors()
+		}
 	}
 
 	// Now replace the provider nodes with proxy nodes if a provider was being
@@ -627,7 +612,7 @@ func (t *ProviderConfigTransformer) addProxyProviders(g *Graph, c *configs.Confi
 	path := c.Path
 
 	// can't add proxies at the root
-	if len(path) == 0 {
+	if path.IsRoot() {
 		return nil
 	}
 
@@ -683,15 +668,13 @@ func (t *ProviderConfigTransformer) addProxyProviders(g *Graph, c *configs.Confi
 
 		concreteProvider := t.providers[fullName]
 
-		// replace the concrete node with the provider passed in
-		if concreteProvider != nil && t.proxiable[fullName] {
-			g.Replace(concreteProvider, proxy)
-			t.providers[fullName] = proxy
-			continue
-		}
-
-		// aliased configurations can't be implicitly passed in
-		if fullAddr.Alias != "" {
+		// replace the concrete node with the provider passed in only if it is
+		// proxyable
+		if concreteProvider != nil {
+			if t.proxiable[fullName] {
+				g.Replace(concreteProvider, proxy)
+				t.providers[fullName] = proxy
+			}
 			continue
 		}
 
@@ -700,6 +683,7 @@ func (t *ProviderConfigTransformer) addProxyProviders(g *Graph, c *configs.Confi
 		g.Add(proxy)
 		t.providers[fullName] = proxy
 	}
+
 	return nil
 }
 

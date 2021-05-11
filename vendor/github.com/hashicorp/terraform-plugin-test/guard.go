@@ -50,22 +50,6 @@ func LongTest(t TestControl) {
 	}
 }
 
-// RequirePreviousVersion is a test guard that will produce a log and call
-// SkipNow on the given TestControl if the receiving Helper does not have a
-// previous plugin version to test against.
-//
-// Call this immediately at the start of any "upgrade test" that expects to
-// be able to run some operations with a previous version of the plugin before
-// "upgrading" to the current version under test to continue with other
-// operations.
-func (h *Helper) RequirePreviousVersion(t TestControl) {
-	t.Helper()
-	if !h.HasPreviousVersion() {
-		t.Log("no previous plugin version available")
-		t.SkipNow()
-	}
-}
-
 // TestControl is an interface requiring a subset of *testing.T which is used
 // by the test guards and helpers in this package. Most callers can simply
 // pass their *testing.T value here, but the interface allows other

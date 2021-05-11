@@ -21,7 +21,7 @@ func (c *ProvidersCommand) Help() string {
 }
 
 func (c *ProvidersCommand) Synopsis() string {
-	return "Prints a tree of the providers used in the configuration"
+	return "Show the providers required for this configuration"
 }
 
 func (c *ProvidersCommand) Run(args []string) int {
@@ -81,6 +81,9 @@ func (c *ProvidersCommand) Run(args []string) int {
 		c.showDiagnostics(diags)
 		return 1
 	}
+
+	// This is a read-only command
+	c.ignoreRemoteBackendVersionConflict(b)
 
 	// Get the state
 	env, err := c.Workspace()
@@ -146,7 +149,7 @@ func (c *ProvidersCommand) populateTreeNode(tree treeprint.Tree, node *configs.M
 }
 
 const providersCommandHelp = `
-Usage: terraform providers [dir]
+Usage: terraform [global options] providers [dir]
 
   Prints out a tree of modules in the referenced configuration annotated with
   their provider requirements.

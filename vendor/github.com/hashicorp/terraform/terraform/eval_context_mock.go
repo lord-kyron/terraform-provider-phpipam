@@ -55,15 +55,13 @@ type MockEvalContext struct {
 	SetProviderInputAddr   addrs.AbsProviderConfig
 	SetProviderInputValues map[string]cty.Value
 
+	ConfigureProviderFn func(
+		addr addrs.AbsProviderConfig,
+		cfg cty.Value) tfdiags.Diagnostics // overrides the other values below, if set
 	ConfigureProviderCalled bool
 	ConfigureProviderAddr   addrs.AbsProviderConfig
 	ConfigureProviderConfig cty.Value
 	ConfigureProviderDiags  tfdiags.Diagnostics
-
-	InitProvisionerCalled      bool
-	InitProvisionerName        string
-	InitProvisionerProvisioner provisioners.Interface
-	InitProvisionerError       error
 
 	ProvisionerCalled      bool
 	ProvisionerName        string
@@ -73,9 +71,7 @@ type MockEvalContext struct {
 	ProvisionerSchemaName   string
 	ProvisionerSchemaSchema *configschema.Block
 
-	CloseProvisionerCalled      bool
-	CloseProvisionerName        string
-	CloseProvisionerProvisioner provisioners.Interface
+	CloseProvisionersCalled bool
 
 	EvaluateBlockCalled     bool
 	EvaluateBlockBody       hcl.Body
@@ -128,6 +124,9 @@ type MockEvalContext struct {
 
 	RefreshStateCalled bool
 	RefreshStateState  *states.SyncState
+
+	PrevRunStateCalled bool
+	PrevRunStateState  *states.SyncState
 
 	InstanceExpanderCalled   bool
 	InstanceExpanderExpander *instances.Expander
@@ -183,9 +182,13 @@ func (c *MockEvalContext) CloseProvider(addr addrs.AbsProviderConfig) error {
 }
 
 func (c *MockEvalContext) ConfigureProvider(addr addrs.AbsProviderConfig, cfg cty.Value) tfdiags.Diagnostics {
+
 	c.ConfigureProviderCalled = true
 	c.ConfigureProviderAddr = addr
 	c.ConfigureProviderConfig = cfg
+	if c.ConfigureProviderFn != nil {
+		return c.ConfigureProviderFn(addr, cfg)
+	}
 	return c.ConfigureProviderDiags
 }
 
@@ -201,16 +204,10 @@ func (c *MockEvalContext) SetProviderInput(addr addrs.AbsProviderConfig, vals ma
 	c.SetProviderInputValues = vals
 }
 
-func (c *MockEvalContext) InitProvisioner(n string) error {
-	c.InitProvisionerCalled = true
-	c.InitProvisionerName = n
-	return c.InitProvisionerError
-}
-
-func (c *MockEvalContext) Provisioner(n string) provisioners.Interface {
+func (c *MockEvalContext) Provisioner(n string) (provisioners.Interface, error) {
 	c.ProvisionerCalled = true
 	c.ProvisionerName = n
-	return c.ProvisionerProvisioner
+	return c.ProvisionerProvisioner, nil
 }
 
 func (c *MockEvalContext) ProvisionerSchema(n string) *configschema.Block {
@@ -219,9 +216,8 @@ func (c *MockEvalContext) ProvisionerSchema(n string) *configschema.Block {
 	return c.ProvisionerSchemaSchema
 }
 
-func (c *MockEvalContext) CloseProvisioner(n string) error {
-	c.CloseProvisionerCalled = true
-	c.CloseProvisionerName = n
+func (c *MockEvalContext) CloseProvisioners() error {
+	c.CloseProvisionersCalled = true
 	return nil
 }
 
@@ -344,6 +340,11 @@ func (c *MockEvalContext) State() *states.SyncState {
 func (c *MockEvalContext) RefreshState() *states.SyncState {
 	c.RefreshStateCalled = true
 	return c.RefreshStateState
+}
+
+func (c *MockEvalContext) PrevRunState() *states.SyncState {
+	c.PrevRunStateCalled = true
+	return c.PrevRunStateState
 }
 
 func (c *MockEvalContext) InstanceExpander() *instances.Expander {

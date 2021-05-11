@@ -75,60 +75,27 @@ func TestMarshalOutputs(t *testing.T) {
 
 func TestMarshalAttributeValues(t *testing.T) {
 	tests := []struct {
-		Attr   cty.Value
-		Schema *configschema.Block
-		Want   attributeValues
+		Attr cty.Value
+		Want attributeValues
 	}{
 		{
 			cty.NilVal,
-			&configschema.Block{
-				Attributes: map[string]*configschema.Attribute{
-					"foo": {
-						Type:     cty.String,
-						Optional: true,
-					},
-				},
-			},
 			nil,
 		},
 		{
 			cty.NullVal(cty.String),
-			&configschema.Block{
-				Attributes: map[string]*configschema.Attribute{
-					"foo": {
-						Type:     cty.String,
-						Optional: true,
-					},
-				},
-			},
 			nil,
 		},
 		{
 			cty.ObjectVal(map[string]cty.Value{
 				"foo": cty.StringVal("bar"),
 			}),
-			&configschema.Block{
-				Attributes: map[string]*configschema.Attribute{
-					"foo": {
-						Type:     cty.String,
-						Optional: true,
-					},
-				},
-			},
 			attributeValues{"foo": json.RawMessage(`"bar"`)},
 		},
 		{
 			cty.ObjectVal(map[string]cty.Value{
 				"foo": cty.NullVal(cty.String),
 			}),
-			&configschema.Block{
-				Attributes: map[string]*configschema.Attribute{
-					"foo": {
-						Type:     cty.String,
-						Optional: true,
-					},
-				},
-			},
 			attributeValues{"foo": json.RawMessage(`null`)},
 		},
 		{
@@ -141,18 +108,22 @@ func TestMarshalAttributeValues(t *testing.T) {
 					cty.StringVal("moon"),
 				}),
 			}),
-			&configschema.Block{
-				Attributes: map[string]*configschema.Attribute{
-					"bar": {
-						Type:     cty.Map(cty.String),
-						Required: true,
-					},
-					"baz": {
-						Type:     cty.List(cty.String),
-						Optional: true,
-					},
-				},
+			attributeValues{
+				"bar": json.RawMessage(`{"hello":"world"}`),
+				"baz": json.RawMessage(`["goodnight","moon"]`),
 			},
+		},
+		// Marked values
+		{
+			cty.ObjectVal(map[string]cty.Value{
+				"bar": cty.MapVal(map[string]cty.Value{
+					"hello": cty.StringVal("world"),
+				}),
+				"baz": cty.ListVal([]cty.Value{
+					cty.StringVal("goodnight"),
+					cty.StringVal("moon").Mark("sensitive"),
+				}),
+			}),
 			attributeValues{
 				"bar": json.RawMessage(`{"hello":"world"}`),
 				"baz": json.RawMessage(`["goodnight","moon"]`),
@@ -161,7 +132,7 @@ func TestMarshalAttributeValues(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		got := marshalAttributeValues(test.Attr, test.Schema)
+		got := marshalAttributeValues(test.Attr)
 		eq := reflect.DeepEqual(got, test.Want)
 		if !eq {
 			t.Fatalf("wrong result:\nGot: %#v\nWant: %#v\n", got, test.Want)
@@ -196,9 +167,8 @@ func TestMarshalResources(t *testing.T) {
 					Instances: map[addrs.InstanceKey]*states.ResourceInstance{
 						addrs.NoKey: {
 							Current: &states.ResourceInstanceObjectSrc{
-								SchemaVersion: 1,
-								Status:        states.ObjectReady,
-								AttrsJSON:     []byte(`{"woozles":"confuzles"}`),
+								Status:    states.ObjectReady,
+								AttrsJSON: []byte(`{"woozles":"confuzles"}`),
 							},
 						},
 					},
@@ -211,13 +181,12 @@ func TestMarshalResources(t *testing.T) {
 			testSchemas(),
 			[]resource{
 				resource{
-					Address:       "test_thing.bar",
-					Mode:          "managed",
-					Type:          "test_thing",
-					Name:          "bar",
-					Index:         addrs.InstanceKey(nil),
-					ProviderName:  "registry.terraform.io/hashicorp/test",
-					SchemaVersion: 1,
+					Address:      "test_thing.bar",
+					Mode:         "managed",
+					Type:         "test_thing",
+					Name:         "bar",
+					Index:        addrs.InstanceKey(nil),
+					ProviderName: "registry.terraform.io/hashicorp/test",
 					AttributeValues: attributeValues{
 						"foozles": json.RawMessage(`null`),
 						"woozles": json.RawMessage(`"confuzles"`),
@@ -225,6 +194,35 @@ func TestMarshalResources(t *testing.T) {
 				},
 			},
 			false,
+		},
+		"single resource wrong schema": {
+			map[string]*states.Resource{
+				"test_thing.baz": {
+					Addr: addrs.AbsResource{
+						Resource: addrs.Resource{
+							Mode: addrs.ManagedResourceMode,
+							Type: "test_thing",
+							Name: "bar",
+						},
+					},
+					Instances: map[addrs.InstanceKey]*states.ResourceInstance{
+						addrs.NoKey: {
+							Current: &states.ResourceInstanceObjectSrc{
+								SchemaVersion: 1,
+								Status:        states.ObjectReady,
+								AttrsJSON:     []byte(`{"woozles":["confuzles"]}`),
+							},
+						},
+					},
+					ProviderConfig: addrs.AbsProviderConfig{
+						Provider: addrs.NewDefaultProvider("test"),
+						Module:   addrs.RootModule,
+					},
+				},
+			},
+			testSchemas(),
+			nil,
+			true,
 		},
 		"resource with count": {
 			map[string]*states.Resource{
@@ -239,9 +237,8 @@ func TestMarshalResources(t *testing.T) {
 					Instances: map[addrs.InstanceKey]*states.ResourceInstance{
 						addrs.IntKey(0): {
 							Current: &states.ResourceInstanceObjectSrc{
-								SchemaVersion: 1,
-								Status:        states.ObjectReady,
-								AttrsJSON:     []byte(`{"woozles":"confuzles"}`),
+								Status:    states.ObjectReady,
+								AttrsJSON: []byte(`{"woozles":"confuzles"}`),
 							},
 						},
 					},
@@ -254,13 +251,12 @@ func TestMarshalResources(t *testing.T) {
 			testSchemas(),
 			[]resource{
 				resource{
-					Address:       "test_thing.bar[0]",
-					Mode:          "managed",
-					Type:          "test_thing",
-					Name:          "bar",
-					Index:         addrs.IntKey(0),
-					ProviderName:  "registry.terraform.io/hashicorp/test",
-					SchemaVersion: 1,
+					Address:      "test_thing.bar[0]",
+					Mode:         "managed",
+					Type:         "test_thing",
+					Name:         "bar",
+					Index:        addrs.IntKey(0),
+					ProviderName: "registry.terraform.io/hashicorp/test",
 					AttributeValues: attributeValues{
 						"foozles": json.RawMessage(`null`),
 						"woozles": json.RawMessage(`"confuzles"`),
@@ -282,9 +278,8 @@ func TestMarshalResources(t *testing.T) {
 					Instances: map[addrs.InstanceKey]*states.ResourceInstance{
 						addrs.StringKey("rockhopper"): {
 							Current: &states.ResourceInstanceObjectSrc{
-								SchemaVersion: 1,
-								Status:        states.ObjectReady,
-								AttrsJSON:     []byte(`{"woozles":"confuzles"}`),
+								Status:    states.ObjectReady,
+								AttrsJSON: []byte(`{"woozles":"confuzles"}`),
 							},
 						},
 					},
@@ -297,13 +292,12 @@ func TestMarshalResources(t *testing.T) {
 			testSchemas(),
 			[]resource{
 				resource{
-					Address:       "test_thing.bar[\"rockhopper\"]",
-					Mode:          "managed",
-					Type:          "test_thing",
-					Name:          "bar",
-					Index:         addrs.StringKey("rockhopper"),
-					ProviderName:  "registry.terraform.io/hashicorp/test",
-					SchemaVersion: 1,
+					Address:      "test_thing.bar[\"rockhopper\"]",
+					Mode:         "managed",
+					Type:         "test_thing",
+					Name:         "bar",
+					Index:        addrs.StringKey("rockhopper"),
+					ProviderName: "registry.terraform.io/hashicorp/test",
 					AttributeValues: attributeValues{
 						"foozles": json.RawMessage(`null`),
 						"woozles": json.RawMessage(`"confuzles"`),
@@ -326,9 +320,8 @@ func TestMarshalResources(t *testing.T) {
 						addrs.NoKey: {
 							Deposed: map[states.DeposedKey]*states.ResourceInstanceObjectSrc{
 								states.DeposedKey(deposedKey): &states.ResourceInstanceObjectSrc{
-									SchemaVersion: 1,
-									Status:        states.ObjectReady,
-									AttrsJSON:     []byte(`{"woozles":"confuzles"}`),
+									Status:    states.ObjectReady,
+									AttrsJSON: []byte(`{"woozles":"confuzles"}`),
 								},
 							},
 						},
@@ -371,15 +364,13 @@ func TestMarshalResources(t *testing.T) {
 						addrs.NoKey: {
 							Deposed: map[states.DeposedKey]*states.ResourceInstanceObjectSrc{
 								states.DeposedKey(deposedKey): &states.ResourceInstanceObjectSrc{
-									SchemaVersion: 1,
-									Status:        states.ObjectReady,
-									AttrsJSON:     []byte(`{"woozles":"confuzles"}`),
+									Status:    states.ObjectReady,
+									AttrsJSON: []byte(`{"woozles":"confuzles"}`),
 								},
 							},
 							Current: &states.ResourceInstanceObjectSrc{
-								SchemaVersion: 1,
-								Status:        states.ObjectReady,
-								AttrsJSON:     []byte(`{"woozles":"confuzles"}`),
+								Status:    states.ObjectReady,
+								AttrsJSON: []byte(`{"woozles":"confuzles"}`),
 							},
 						},
 					},
@@ -392,13 +383,12 @@ func TestMarshalResources(t *testing.T) {
 			testSchemas(),
 			[]resource{
 				resource{
-					Address:       "test_thing.bar",
-					Mode:          "managed",
-					Type:          "test_thing",
-					Name:          "bar",
-					Index:         addrs.InstanceKey(nil),
-					ProviderName:  "registry.terraform.io/hashicorp/test",
-					SchemaVersion: 1,
+					Address:      "test_thing.bar",
+					Mode:         "managed",
+					Type:         "test_thing",
+					Name:         "bar",
+					Index:        addrs.InstanceKey(nil),
+					ProviderName: "registry.terraform.io/hashicorp/test",
 					AttributeValues: attributeValues{
 						"foozles": json.RawMessage(`null`),
 						"woozles": json.RawMessage(`"confuzles"`),
@@ -579,6 +569,59 @@ func TestMarshalModules_nested(t *testing.T) {
 	}
 
 	if got[0].ChildModules[0].Address != "module.child.module.submodule" {
+		t.Fatalf("wrong result! got %#v\n", got)
+	}
+}
+
+func TestMarshalModules_parent_no_resources(t *testing.T) {
+	subModule, _ := addrs.ParseModuleInstanceStr("module.child.module.submodule")
+	testState := states.BuildState(func(s *states.SyncState) {
+		s.SetResourceInstanceCurrent(
+			addrs.Resource{
+				Mode: addrs.ManagedResourceMode,
+				Type: "test_instance",
+				Name: "foo",
+			}.Instance(addrs.NoKey).Absolute(addrs.RootModuleInstance),
+			&states.ResourceInstanceObjectSrc{
+				AttrsJSON: []byte(`{"id":"bar","foo":"value","bar":"value"}`),
+				Status:    states.ObjectReady,
+			},
+			addrs.AbsProviderConfig{
+				Provider: addrs.NewDefaultProvider("test"),
+				Module:   addrs.RootModule,
+			},
+		)
+		s.SetResourceInstanceCurrent(
+			addrs.Resource{
+				Mode: addrs.ManagedResourceMode,
+				Type: "test_instance",
+				Name: "foo",
+			}.Instance(addrs.NoKey).Absolute(subModule),
+			&states.ResourceInstanceObjectSrc{
+				AttrsJSON: []byte(`{"id":"foo","foo":"value","bar":"value"}`),
+				Status:    states.ObjectReady,
+			},
+			addrs.AbsProviderConfig{
+				Provider: addrs.NewDefaultProvider("test"),
+				Module:   subModule.Module(),
+			},
+		)
+	})
+	got, err := marshalRootModule(testState, testSchemas())
+
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err.Error())
+	}
+
+	if len(got.ChildModules) != 1 {
+		t.Fatalf("wrong result! got %d modules, expected 1", len(got.ChildModules))
+	}
+
+	if got.ChildModules[0].Address != "module.child" {
+		t.Fatalf("wrong result! got %#v\n", got)
+	}
+
+	if got.ChildModules[0].ChildModules[0].Address != "module.child.module.submodule" {
 		t.Fatalf("wrong result! got %#v\n", got)
 	}
 }

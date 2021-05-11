@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/hashicorp/terraform/backend"
-	"github.com/hashicorp/terraform/helper/acctest"
+	"github.com/hashicorp/terraform/internal/legacy/helper/acctest"
 )
 
 func TestBackend_impl(t *testing.T) {
@@ -118,6 +118,34 @@ func TestBackendSASTokenBasic(t *testing.T) {
 		"sas_token":            *sasToken,
 		"environment":          os.Getenv("ARM_ENVIRONMENT"),
 		"endpoint":             os.Getenv("ARM_ENDPOINT"),
+	})).(*Backend)
+
+	backend.TestBackendStates(t, b)
+}
+
+func TestBackendAzureADAuthBasic(t *testing.T) {
+	testAccAzureBackend(t)
+	rs := acctest.RandString(4)
+	res := testResourceNames(rs, "testState")
+	res.useAzureADAuth = true
+	armClient := buildTestClient(t, res)
+
+	ctx := context.TODO()
+	err := armClient.buildTestResources(ctx, &res)
+	defer armClient.destroyTestResources(ctx, res)
+	if err != nil {
+		armClient.destroyTestResources(ctx, res)
+		t.Fatalf("Error creating Test Resources: %q", err)
+	}
+
+	b := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+		"storage_account_name": res.storageAccountName,
+		"container_name":       res.storageContainerName,
+		"key":                  res.storageKeyName,
+		"access_key":           res.storageAccountAccessKey,
+		"environment":          os.Getenv("ARM_ENVIRONMENT"),
+		"endpoint":             os.Getenv("ARM_ENDPOINT"),
+		"use_azuread_auth":     true,
 	})).(*Backend)
 
 	backend.TestBackendStates(t, b)
@@ -258,6 +286,9 @@ func TestBackendAccessKeyLocked(t *testing.T) {
 
 	backend.TestBackendStateLocks(t, b1, b2)
 	backend.TestBackendStateForceUnlock(t, b1, b2)
+
+	backend.TestBackendStateLocksInWS(t, b1, b2, "foo")
+	backend.TestBackendStateForceUnlockInWS(t, b1, b2, "foo")
 }
 
 func TestBackendServicePrincipalLocked(t *testing.T) {
@@ -301,4 +332,7 @@ func TestBackendServicePrincipalLocked(t *testing.T) {
 
 	backend.TestBackendStateLocks(t, b1, b2)
 	backend.TestBackendStateForceUnlock(t, b1, b2)
+
+	backend.TestBackendStateLocksInWS(t, b1, b2, "foo")
+	backend.TestBackendStateForceUnlockInWS(t, b1, b2, "foo")
 }

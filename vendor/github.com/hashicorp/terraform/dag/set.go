@@ -38,33 +38,32 @@ func (s Set) Include(v interface{}) bool {
 // Intersection computes the set intersection with other.
 func (s Set) Intersection(other Set) Set {
 	result := make(Set)
-	if s == nil {
+	if s == nil || other == nil {
 		return result
 	}
-	if other != nil {
-		for _, v := range s {
-			if other.Include(v) {
-				result.Add(v)
-			}
+	// Iteration over a smaller set has better performance.
+	if other.Len() < s.Len() {
+		s, other = other, s
+	}
+	for _, v := range s {
+		if other.Include(v) {
+			result.Add(v)
 		}
 	}
-
 	return result
 }
 
 // Difference returns a set with the elements that s has but
 // other doesn't.
 func (s Set) Difference(other Set) Set {
+	if other == nil || other.Len() == 0 {
+		return s.Copy()
+	}
+
 	result := make(Set)
-	if s != nil {
-		for k, v := range s {
-			var ok bool
-			if other != nil {
-				_, ok = other[k]
-			}
-			if !ok {
-				result.Add(v)
-			}
+	for k, v := range s {
+		if _, ok := other[k]; !ok {
+			result.Add(v)
 		}
 	}
 
@@ -106,7 +105,7 @@ func (s Set) List() []interface{} {
 
 // Copy returns a shallow copy of the set.
 func (s Set) Copy() Set {
-	c := make(Set)
+	c := make(Set, len(s))
 	for k, v := range s {
 		c[k] = v
 	}

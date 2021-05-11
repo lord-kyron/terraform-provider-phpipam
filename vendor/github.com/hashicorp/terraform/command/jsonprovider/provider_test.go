@@ -7,7 +7,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/zclconf/go-cty/cty"
 
-	"github.com/hashicorp/terraform/addrs"
 	"github.com/hashicorp/terraform/configs/configschema"
 	"github.com/hashicorp/terraform/terraform"
 )
@@ -49,6 +48,25 @@ func TestMarshalProvider(t *testing.T) {
 								},
 								"ami": {
 									AttributeType:   json.RawMessage(`"string"`),
+									Optional:        true,
+									DescriptionKind: "plain",
+								},
+								"volumes": {
+									AttributeNestedType: &nestedType{
+										NestingMode: "list",
+										Attributes: map[string]*attribute{
+											"size": {
+												AttributeType:   json.RawMessage(`"string"`),
+												Required:        true,
+												DescriptionKind: "plain",
+											},
+											"mount_point": {
+												AttributeType:   json.RawMessage(`"string"`),
+												Required:        true,
+												DescriptionKind: "plain",
+											},
+										},
+									},
 									Optional:        true,
 									DescriptionKind: "plain",
 								},
@@ -130,14 +148,6 @@ func TestMarshalProvider(t *testing.T) {
 	}
 }
 
-func testProviders() *terraform.Schemas {
-	return &terraform.Schemas{
-		Providers: map[addrs.Provider]*terraform.ProviderSchema{
-			addrs.NewDefaultProvider("test"): testProvider(),
-		},
-	}
-}
-
 func testProvider() *terraform.ProviderSchema {
 	return &terraform.ProviderSchema{
 		Provider: &configschema.Block{
@@ -150,6 +160,16 @@ func testProvider() *terraform.ProviderSchema {
 				Attributes: map[string]*configschema.Attribute{
 					"id":  {Type: cty.String, Optional: true, Computed: true},
 					"ami": {Type: cty.String, Optional: true},
+					"volumes": {
+						Optional: true,
+						NestedType: &configschema.Object{
+							Nesting: configschema.NestingList,
+							Attributes: map[string]*configschema.Attribute{
+								"size":        {Type: cty.String, Required: true},
+								"mount_point": {Type: cty.String, Required: true},
+							},
+						},
+					},
 				},
 				BlockTypes: map[string]*configschema.NestedBlock{
 					"network_interface": {

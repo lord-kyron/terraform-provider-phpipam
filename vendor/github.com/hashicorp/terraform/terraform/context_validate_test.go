@@ -10,6 +10,7 @@ import (
 
 	"github.com/hashicorp/terraform/addrs"
 	"github.com/hashicorp/terraform/configs/configschema"
+	"github.com/hashicorp/terraform/plans"
 	"github.com/hashicorp/terraform/providers"
 	"github.com/hashicorp/terraform/provisioners"
 	"github.com/hashicorp/terraform/states"
@@ -18,13 +19,13 @@ import (
 
 func TestContext2Validate_badCount(t *testing.T) {
 	p := testProvider("aws")
-	p.GetSchemaReturn = &ProviderSchema{
+	p.GetProviderSchemaResponse = getProviderSchemaResponseFromProviderSchema(&ProviderSchema{
 		ResourceTypes: map[string]*configschema.Block{
 			"aws_instance": {
 				Attributes: map[string]*configschema.Attribute{},
 			},
 		},
-	}
+	})
 
 	m := testModule(t, "validate-bad-count")
 	c := testContext2(t, &ContextOpts{
@@ -42,13 +43,13 @@ func TestContext2Validate_badCount(t *testing.T) {
 
 func TestContext2Validate_badResource_reference(t *testing.T) {
 	p := testProvider("aws")
-	p.GetSchemaReturn = &ProviderSchema{
+	p.GetProviderSchemaResponse = getProviderSchemaResponseFromProviderSchema(&ProviderSchema{
 		ResourceTypes: map[string]*configschema.Block{
 			"aws_instance": {
 				Attributes: map[string]*configschema.Attribute{},
 			},
 		},
-	}
+	})
 
 	m := testModule(t, "validate-bad-resource-count")
 	c := testContext2(t, &ContextOpts{
@@ -66,7 +67,7 @@ func TestContext2Validate_badResource_reference(t *testing.T) {
 
 func TestContext2Validate_badVar(t *testing.T) {
 	p := testProvider("aws")
-	p.GetSchemaReturn = &ProviderSchema{
+	p.GetProviderSchemaResponse = getProviderSchemaResponseFromProviderSchema(&ProviderSchema{
 		ResourceTypes: map[string]*configschema.Block{
 			"aws_instance": {
 				Attributes: map[string]*configschema.Attribute{
@@ -75,7 +76,7 @@ func TestContext2Validate_badVar(t *testing.T) {
 				},
 			},
 		},
-	}
+	})
 
 	m := testModule(t, "validate-bad-var")
 	c := testContext2(t, &ContextOpts{
@@ -94,7 +95,7 @@ func TestContext2Validate_badVar(t *testing.T) {
 func TestContext2Validate_varMapOverrideOld(t *testing.T) {
 	m := testModule(t, "validate-module-pc-vars")
 	p := testProvider("aws")
-	p.GetSchemaReturn = &ProviderSchema{
+	p.GetProviderSchemaResponse = getProviderSchemaResponseFromProviderSchema(&ProviderSchema{
 		Provider: &configschema.Block{
 			Attributes: map[string]*configschema.Attribute{
 				"foo": {Type: cty.String, Optional: true},
@@ -105,7 +106,7 @@ func TestContext2Validate_varMapOverrideOld(t *testing.T) {
 				Attributes: map[string]*configschema.Attribute{},
 			},
 		},
-	}
+	})
 
 	_, diags := NewContext(&ContextOpts{
 		Config: m,
@@ -133,25 +134,31 @@ func TestContext2Validate_varNoDefaultExplicitType(t *testing.T) {
 
 func TestContext2Validate_computedVar(t *testing.T) {
 	p := testProvider("aws")
-	p.GetSchemaReturn = &ProviderSchema{
-		Provider: &configschema.Block{
-			Attributes: map[string]*configschema.Attribute{
-				"value": {Type: cty.String, Optional: true},
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		Provider: providers.Schema{
+			Block: &configschema.Block{
+				Attributes: map[string]*configschema.Attribute{
+					"value": {Type: cty.String, Optional: true},
+				},
 			},
 		},
-		ResourceTypes: map[string]*configschema.Block{
+		ResourceTypes: map[string]providers.Schema{
 			"aws_instance": {
-				Attributes: map[string]*configschema.Attribute{},
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{},
+				},
 			},
 		},
 	}
 	pt := testProvider("test")
-	pt.GetSchemaReturn = &ProviderSchema{
-		ResourceTypes: map[string]*configschema.Block{
+	pt.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		ResourceTypes: map[string]providers.Schema{
 			"test_instance": {
-				Attributes: map[string]*configschema.Attribute{
-					"id":    {Type: cty.String, Computed: true},
-					"value": {Type: cty.String, Optional: true},
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{
+						"id":    {Type: cty.String, Computed: true},
+						"value": {Type: cty.String, Optional: true},
+					},
 				},
 			},
 		},
@@ -166,7 +173,7 @@ func TestContext2Validate_computedVar(t *testing.T) {
 		},
 	})
 
-	p.PrepareProviderConfigFn = func(req providers.PrepareProviderConfigRequest) (resp providers.PrepareProviderConfigResponse) {
+	p.ValidateProviderConfigFn = func(req providers.ValidateProviderConfigRequest) (resp providers.ValidateProviderConfigResponse) {
 		val := req.Config.GetAttr("value")
 		if val.IsKnown() {
 			resp.Diagnostics = resp.Diagnostics.Append(fmt.Errorf("value isn't computed"))
@@ -179,26 +186,30 @@ func TestContext2Validate_computedVar(t *testing.T) {
 	if diags.HasErrors() {
 		t.Fatalf("unexpected error: %s", diags.Err())
 	}
-	if p.ConfigureCalled {
+	if p.ConfigureProviderCalled {
 		t.Fatal("Configure should not be called for provider")
 	}
 }
 
 func TestContext2Validate_computedInFunction(t *testing.T) {
 	p := testProvider("aws")
-	p.GetSchemaReturn = &ProviderSchema{
-		ResourceTypes: map[string]*configschema.Block{
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		ResourceTypes: map[string]providers.Schema{
 			"aws_instance": {
-				Attributes: map[string]*configschema.Attribute{
-					"attr": {Type: cty.Number, Optional: true},
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{
+						"attr": {Type: cty.Number, Optional: true},
+					},
 				},
 			},
 		},
-		DataSources: map[string]*configschema.Block{
+		DataSources: map[string]providers.Schema{
 			"aws_data_source": {
-				Attributes: map[string]*configschema.Attribute{
-					"optional_attr": {Type: cty.String, Optional: true},
-					"computed":      {Type: cty.String, Computed: true},
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{
+						"optional_attr": {Type: cty.String, Optional: true},
+						"computed":      {Type: cty.String, Computed: true},
+					},
 				},
 			},
 		},
@@ -223,17 +234,21 @@ func TestContext2Validate_computedInFunction(t *testing.T) {
 // can be realized during a plan.
 func TestContext2Validate_countComputed(t *testing.T) {
 	p := testProvider("aws")
-	p.GetSchemaReturn = &ProviderSchema{
-		ResourceTypes: map[string]*configschema.Block{
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		ResourceTypes: map[string]providers.Schema{
 			"aws_instance": {
-				Attributes: map[string]*configschema.Attribute{},
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{},
+				},
 			},
 		},
-		DataSources: map[string]*configschema.Block{
+		DataSources: map[string]providers.Schema{
 			"aws_data_source": {
-				Attributes: map[string]*configschema.Attribute{
-					"compute": {Type: cty.String, Optional: true},
-					"value":   {Type: cty.String, Computed: true},
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{
+						"compute": {Type: cty.String, Optional: true},
+						"value":   {Type: cty.String, Computed: true},
+					},
 				},
 			},
 		},
@@ -255,14 +270,15 @@ func TestContext2Validate_countComputed(t *testing.T) {
 
 func TestContext2Validate_countNegative(t *testing.T) {
 	p := testProvider("aws")
-	p.GetSchemaReturn = &ProviderSchema{
-		ResourceTypes: map[string]*configschema.Block{
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		ResourceTypes: map[string]providers.Schema{
 			"aws_instance": {
-				Attributes: map[string]*configschema.Attribute{},
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{},
+				},
 			},
 		},
 	}
-
 	m := testModule(t, "validate-count-negative")
 	c := testContext2(t, &ContextOpts{
 		Config: m,
@@ -279,16 +295,17 @@ func TestContext2Validate_countNegative(t *testing.T) {
 
 func TestContext2Validate_countVariable(t *testing.T) {
 	p := testProvider("aws")
-	p.GetSchemaReturn = &ProviderSchema{
-		ResourceTypes: map[string]*configschema.Block{
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		ResourceTypes: map[string]providers.Schema{
 			"aws_instance": {
-				Attributes: map[string]*configschema.Attribute{
-					"foo": {Type: cty.String, Optional: true},
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{
+						"foo": {Type: cty.String, Optional: true},
+					},
 				},
 			},
 		},
 	}
-
 	m := testModule(t, "apply-count-variable")
 	c := testContext2(t, &ContextOpts{
 		Config: m,
@@ -306,16 +323,17 @@ func TestContext2Validate_countVariable(t *testing.T) {
 func TestContext2Validate_countVariableNoDefault(t *testing.T) {
 	p := testProvider("aws")
 	m := testModule(t, "validate-count-variable")
-	p.GetSchemaReturn = &ProviderSchema{
-		ResourceTypes: map[string]*configschema.Block{
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		ResourceTypes: map[string]providers.Schema{
 			"aws_instance": {
-				Attributes: map[string]*configschema.Attribute{
-					"foo": {Type: cty.String, Optional: true},
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{
+						"foo": {Type: cty.String, Optional: true},
+					},
 				},
 			},
 		},
 	}
-
 	_, diags := NewContext(&ContextOpts{
 		Config: m,
 		Providers: map[addrs.Provider]providers.Factory{
@@ -330,16 +348,17 @@ func TestContext2Validate_countVariableNoDefault(t *testing.T) {
 
 func TestContext2Validate_moduleBadOutput(t *testing.T) {
 	p := testProvider("aws")
-	p.GetSchemaReturn = &ProviderSchema{
-		ResourceTypes: map[string]*configschema.Block{
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		ResourceTypes: map[string]providers.Schema{
 			"aws_instance": {
-				Attributes: map[string]*configschema.Attribute{
-					"foo": {Type: cty.String, Optional: true},
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{
+						"foo": {Type: cty.String, Optional: true},
+					},
 				},
 			},
 		},
 	}
-
 	m := testModule(t, "validate-bad-module-output")
 	c := testContext2(t, &ContextOpts{
 		Config: m,
@@ -356,16 +375,17 @@ func TestContext2Validate_moduleBadOutput(t *testing.T) {
 
 func TestContext2Validate_moduleGood(t *testing.T) {
 	p := testProvider("aws")
-	p.GetSchemaReturn = &ProviderSchema{
-		ResourceTypes: map[string]*configschema.Block{
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		ResourceTypes: map[string]providers.Schema{
 			"aws_instance": {
-				Attributes: map[string]*configschema.Attribute{
-					"foo": {Type: cty.String, Optional: true},
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{
+						"foo": {Type: cty.String, Optional: true},
+					},
 				},
 			},
 		},
 	}
-
 	m := testModule(t, "validate-good-module")
 	c := testContext2(t, &ContextOpts{
 		Config: m,
@@ -383,10 +403,12 @@ func TestContext2Validate_moduleGood(t *testing.T) {
 func TestContext2Validate_moduleBadResource(t *testing.T) {
 	m := testModule(t, "validate-module-bad-rc")
 	p := testProvider("aws")
-	p.GetSchemaReturn = &ProviderSchema{
-		ResourceTypes: map[string]*configschema.Block{
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		ResourceTypes: map[string]providers.Schema{
 			"aws_instance": {
-				Attributes: map[string]*configschema.Attribute{},
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{},
+				},
 			},
 		},
 	}
@@ -398,7 +420,7 @@ func TestContext2Validate_moduleBadResource(t *testing.T) {
 		},
 	})
 
-	p.ValidateResourceTypeConfigResponse = providers.ValidateResourceTypeConfigResponse{
+	p.ValidateResourceConfigResponse = &providers.ValidateResourceConfigResponse{
 		Diagnostics: tfdiags.Diagnostics{}.Append(fmt.Errorf("bad")),
 	}
 
@@ -411,11 +433,13 @@ func TestContext2Validate_moduleBadResource(t *testing.T) {
 func TestContext2Validate_moduleDepsShouldNotCycle(t *testing.T) {
 	m := testModule(t, "validate-module-deps-cycle")
 	p := testProvider("aws")
-	p.GetSchemaReturn = &ProviderSchema{
-		ResourceTypes: map[string]*configschema.Block{
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		ResourceTypes: map[string]providers.Schema{
 			"aws_instance": {
-				Attributes: map[string]*configschema.Attribute{
-					"id": {Type: cty.String, Optional: true},
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{
+						"id": {Type: cty.String, Optional: true},
+					},
 				},
 			},
 		},
@@ -437,16 +461,20 @@ func TestContext2Validate_moduleDepsShouldNotCycle(t *testing.T) {
 func TestContext2Validate_moduleProviderVar(t *testing.T) {
 	m := testModule(t, "validate-module-pc-vars")
 	p := testProvider("aws")
-	p.GetSchemaReturn = &ProviderSchema{
-		Provider: &configschema.Block{
-			Attributes: map[string]*configschema.Attribute{
-				"foo": {Type: cty.String, Optional: true},
-			},
-		},
-		ResourceTypes: map[string]*configschema.Block{
-			"aws_instance": {
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		Provider: providers.Schema{
+			Block: &configschema.Block{
 				Attributes: map[string]*configschema.Attribute{
 					"foo": {Type: cty.String, Optional: true},
+				},
+			},
+		},
+		ResourceTypes: map[string]providers.Schema{
+			"aws_instance": {
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{
+						"foo": {Type: cty.String, Optional: true},
+					},
 				},
 			},
 		},
@@ -465,7 +493,7 @@ func TestContext2Validate_moduleProviderVar(t *testing.T) {
 		},
 	})
 
-	p.PrepareProviderConfigFn = func(req providers.PrepareProviderConfigRequest) (resp providers.PrepareProviderConfigResponse) {
+	p.ValidateProviderConfigFn = func(req providers.ValidateProviderConfigRequest) (resp providers.ValidateProviderConfigResponse) {
 		if req.Config.GetAttr("foo").IsNull() {
 			resp.Diagnostics = resp.Diagnostics.Append(errors.New("foo is null"))
 		}
@@ -481,16 +509,20 @@ func TestContext2Validate_moduleProviderVar(t *testing.T) {
 func TestContext2Validate_moduleProviderInheritUnused(t *testing.T) {
 	m := testModule(t, "validate-module-pc-inherit-unused")
 	p := testProvider("aws")
-	p.GetSchemaReturn = &ProviderSchema{
-		Provider: &configschema.Block{
-			Attributes: map[string]*configschema.Attribute{
-				"foo": {Type: cty.String, Optional: true},
-			},
-		},
-		ResourceTypes: map[string]*configschema.Block{
-			"aws_instance": {
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		Provider: providers.Schema{
+			Block: &configschema.Block{
 				Attributes: map[string]*configschema.Attribute{
 					"foo": {Type: cty.String, Optional: true},
+				},
+			},
+		},
+		ResourceTypes: map[string]providers.Schema{
+			"aws_instance": {
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{
+						"foo": {Type: cty.String, Optional: true},
+					},
 				},
 			},
 		},
@@ -503,7 +535,7 @@ func TestContext2Validate_moduleProviderInheritUnused(t *testing.T) {
 		},
 	})
 
-	p.PrepareProviderConfigFn = func(req providers.PrepareProviderConfigRequest) (resp providers.PrepareProviderConfigResponse) {
+	p.ValidateProviderConfigFn = func(req providers.ValidateProviderConfigRequest) (resp providers.ValidateProviderConfigResponse) {
 		if req.Config.GetAttr("foo").IsNull() {
 			resp.Diagnostics = resp.Diagnostics.Append(errors.New("foo is null"))
 		}
@@ -518,12 +550,14 @@ func TestContext2Validate_moduleProviderInheritUnused(t *testing.T) {
 
 func TestContext2Validate_orphans(t *testing.T) {
 	p := testProvider("aws")
-	p.GetSchemaReturn = &ProviderSchema{
-		ResourceTypes: map[string]*configschema.Block{
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		ResourceTypes: map[string]providers.Schema{
 			"aws_instance": {
-				Attributes: map[string]*configschema.Attribute{
-					"foo": {Type: cty.String, Optional: true},
-					"num": {Type: cty.String, Optional: true},
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{
+						"foo": {Type: cty.String, Optional: true},
+						"num": {Type: cty.String, Optional: true},
+					},
 				},
 			},
 		},
@@ -543,12 +577,12 @@ func TestContext2Validate_orphans(t *testing.T) {
 		State: state,
 	})
 
-	p.ValidateResourceTypeConfigFn = func(req providers.ValidateResourceTypeConfigRequest) providers.ValidateResourceTypeConfigResponse {
+	p.ValidateResourceConfigFn = func(req providers.ValidateResourceConfigRequest) providers.ValidateResourceConfigResponse {
 		var diags tfdiags.Diagnostics
 		if req.Config.GetAttr("foo").IsNull() {
-			diags.Append(errors.New("foo is not set"))
+			diags = diags.Append(errors.New("foo is not set"))
 		}
-		return providers.ValidateResourceTypeConfigResponse{
+		return providers.ValidateResourceConfigResponse{
 			Diagnostics: diags,
 		}
 	}
@@ -562,15 +596,19 @@ func TestContext2Validate_orphans(t *testing.T) {
 func TestContext2Validate_providerConfig_bad(t *testing.T) {
 	m := testModule(t, "validate-bad-pc")
 	p := testProvider("aws")
-	p.GetSchemaReturn = &ProviderSchema{
-		Provider: &configschema.Block{
-			Attributes: map[string]*configschema.Attribute{
-				"foo": {Type: cty.String, Optional: true},
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		Provider: providers.Schema{
+			Block: &configschema.Block{
+				Attributes: map[string]*configschema.Attribute{
+					"foo": {Type: cty.String, Optional: true},
+				},
 			},
 		},
-		ResourceTypes: map[string]*configschema.Block{
+		ResourceTypes: map[string]providers.Schema{
 			"aws_instance": {
-				Attributes: map[string]*configschema.Attribute{},
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{},
+				},
 			},
 		},
 	}
@@ -582,7 +620,7 @@ func TestContext2Validate_providerConfig_bad(t *testing.T) {
 		},
 	})
 
-	p.PrepareProviderConfigResponse = providers.PrepareProviderConfigResponse{
+	p.ValidateProviderConfigResponse = &providers.ValidateProviderConfigResponse{
 		Diagnostics: tfdiags.Diagnostics{}.Append(fmt.Errorf("bad")),
 	}
 
@@ -595,18 +633,22 @@ func TestContext2Validate_providerConfig_bad(t *testing.T) {
 	}
 }
 
-func TestContext2Validate_providerConfig_badEmpty(t *testing.T) {
-	m := testModule(t, "validate-bad-pc-empty")
+func TestContext2Validate_providerConfig_skippedEmpty(t *testing.T) {
+	m := testModule(t, "validate-skipped-pc-empty")
 	p := testProvider("aws")
-	p.GetSchemaReturn = &ProviderSchema{
-		Provider: &configschema.Block{
-			Attributes: map[string]*configschema.Attribute{
-				"foo": {Type: cty.String, Optional: true},
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		Provider: providers.Schema{
+			Block: &configschema.Block{
+				Attributes: map[string]*configschema.Attribute{
+					"foo": {Type: cty.String, Optional: true},
+				},
 			},
 		},
-		ResourceTypes: map[string]*configschema.Block{
+		ResourceTypes: map[string]providers.Schema{
 			"aws_instance": {
-				Attributes: map[string]*configschema.Attribute{},
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{},
+				},
 			},
 		},
 	}
@@ -618,28 +660,32 @@ func TestContext2Validate_providerConfig_badEmpty(t *testing.T) {
 		},
 	})
 
-	p.PrepareProviderConfigResponse = providers.PrepareProviderConfigResponse{
-		Diagnostics: tfdiags.Diagnostics{}.Append(fmt.Errorf("bad")),
+	p.ValidateProviderConfigResponse = &providers.ValidateProviderConfigResponse{
+		Diagnostics: tfdiags.Diagnostics{}.Append(fmt.Errorf("should not be called")),
 	}
 
 	diags := c.Validate()
-	if !diags.HasErrors() {
-		t.Fatalf("succeeded; want error")
+	if diags.HasErrors() {
+		t.Fatalf("unexpected error: %s", diags.Err())
 	}
 }
 
 func TestContext2Validate_providerConfig_good(t *testing.T) {
 	m := testModule(t, "validate-bad-pc")
 	p := testProvider("aws")
-	p.GetSchemaReturn = &ProviderSchema{
-		Provider: &configschema.Block{
-			Attributes: map[string]*configschema.Attribute{
-				"foo": {Type: cty.String, Optional: true},
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		Provider: providers.Schema{
+			Block: &configschema.Block{
+				Attributes: map[string]*configschema.Attribute{
+					"foo": {Type: cty.String, Optional: true},
+				},
 			},
 		},
-		ResourceTypes: map[string]*configschema.Block{
+		ResourceTypes: map[string]providers.Schema{
 			"aws_instance": {
-				Attributes: map[string]*configschema.Attribute{},
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{},
+				},
 			},
 		},
 	}
@@ -663,15 +709,19 @@ func TestContext2Validate_requiredProviderConfig(t *testing.T) {
 	m := testModule(t, "validate-required-provider-config")
 	p := testProvider("aws")
 
-	p.GetSchemaReturn = &ProviderSchema{
-		Provider: &configschema.Block{
-			Attributes: map[string]*configschema.Attribute{
-				"required_attribute": {Type: cty.String, Required: true},
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		Provider: providers.Schema{
+			Block: &configschema.Block{
+				Attributes: map[string]*configschema.Attribute{
+					"required_attribute": {Type: cty.String, Required: true},
+				},
 			},
 		},
-		ResourceTypes: map[string]*configschema.Block{
+		ResourceTypes: map[string]providers.Schema{
 			"aws_instance": {
-				Attributes: map[string]*configschema.Attribute{},
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{},
+				},
 			},
 		},
 	}
@@ -692,11 +742,13 @@ func TestContext2Validate_requiredProviderConfig(t *testing.T) {
 func TestContext2Validate_provisionerConfig_bad(t *testing.T) {
 	m := testModule(t, "validate-bad-prov-conf")
 	p := testProvider("aws")
-	p.GetSchemaReturn = &ProviderSchema{
-		ResourceTypes: map[string]*configschema.Block{
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		ResourceTypes: map[string]providers.Schema{
 			"aws_instance": {
-				Attributes: map[string]*configschema.Attribute{
-					"foo": {Type: cty.String, Optional: true},
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{
+						"foo": {Type: cty.String, Optional: true},
+					},
 				},
 			},
 		},
@@ -709,12 +761,12 @@ func TestContext2Validate_provisionerConfig_bad(t *testing.T) {
 		Providers: map[addrs.Provider]providers.Factory{
 			addrs.NewDefaultProvider("aws"): testProviderFuncFixed(p),
 		},
-		Provisioners: map[string]ProvisionerFactory{
+		Provisioners: map[string]provisioners.Factory{
 			"shell": testProvisionerFuncFixed(pr),
 		},
 	})
 
-	p.PrepareProviderConfigResponse = providers.PrepareProviderConfigResponse{
+	p.ValidateProviderConfigResponse = &providers.ValidateProviderConfigResponse{
 		Diagnostics: tfdiags.Diagnostics{}.Append(fmt.Errorf("bad")),
 	}
 
@@ -727,11 +779,13 @@ func TestContext2Validate_provisionerConfig_bad(t *testing.T) {
 func TestContext2Validate_badResourceConnection(t *testing.T) {
 	m := testModule(t, "validate-bad-resource-connection")
 	p := testProvider("aws")
-	p.GetSchemaReturn = &ProviderSchema{
-		ResourceTypes: map[string]*configschema.Block{
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		ResourceTypes: map[string]providers.Schema{
 			"aws_instance": {
-				Attributes: map[string]*configschema.Attribute{
-					"foo": {Type: cty.String, Optional: true},
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{
+						"foo": {Type: cty.String, Optional: true},
+					},
 				},
 			},
 		},
@@ -744,7 +798,7 @@ func TestContext2Validate_badResourceConnection(t *testing.T) {
 		Providers: map[addrs.Provider]providers.Factory{
 			addrs.NewDefaultProvider("aws"): testProviderFuncFixed(p),
 		},
-		Provisioners: map[string]ProvisionerFactory{
+		Provisioners: map[string]provisioners.Factory{
 			"shell": testProvisionerFuncFixed(pr),
 		},
 	})
@@ -759,11 +813,13 @@ func TestContext2Validate_badResourceConnection(t *testing.T) {
 func TestContext2Validate_badProvisionerConnection(t *testing.T) {
 	m := testModule(t, "validate-bad-prov-connection")
 	p := testProvider("aws")
-	p.GetSchemaReturn = &ProviderSchema{
-		ResourceTypes: map[string]*configschema.Block{
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		ResourceTypes: map[string]providers.Schema{
 			"aws_instance": {
-				Attributes: map[string]*configschema.Attribute{
-					"foo": {Type: cty.String, Optional: true},
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{
+						"foo": {Type: cty.String, Optional: true},
+					},
 				},
 			},
 		},
@@ -776,7 +832,7 @@ func TestContext2Validate_badProvisionerConnection(t *testing.T) {
 		Providers: map[addrs.Provider]providers.Factory{
 			addrs.NewDefaultProvider("aws"): testProviderFuncFixed(p),
 		},
-		Provisioners: map[string]ProvisionerFactory{
+		Provisioners: map[string]provisioners.Factory{
 			"shell": testProvisionerFuncFixed(pr),
 		},
 	})
@@ -791,16 +847,20 @@ func TestContext2Validate_badProvisionerConnection(t *testing.T) {
 func TestContext2Validate_provisionerConfig_good(t *testing.T) {
 	m := testModule(t, "validate-bad-prov-conf")
 	p := testProvider("aws")
-	p.GetSchemaReturn = &ProviderSchema{
-		Provider: &configschema.Block{
-			Attributes: map[string]*configschema.Attribute{
-				"foo": {Type: cty.String, Optional: true},
-			},
-		},
-		ResourceTypes: map[string]*configschema.Block{
-			"aws_instance": {
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		Provider: providers.Schema{
+			Block: &configschema.Block{
 				Attributes: map[string]*configschema.Attribute{
 					"foo": {Type: cty.String, Optional: true},
+				},
+			},
+		},
+		ResourceTypes: map[string]providers.Schema{
+			"aws_instance": {
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{
+						"foo": {Type: cty.String, Optional: true},
+					},
 				},
 			},
 		},
@@ -810,7 +870,7 @@ func TestContext2Validate_provisionerConfig_good(t *testing.T) {
 	pr.ValidateProvisionerConfigFn = func(req provisioners.ValidateProvisionerConfigRequest) provisioners.ValidateProvisionerConfigResponse {
 		var diags tfdiags.Diagnostics
 		if req.Config.GetAttr("test_string").IsNull() {
-			diags.Append(errors.New("test_string is not set"))
+			diags = diags.Append(errors.New("test_string is not set"))
 		}
 		return provisioners.ValidateProvisionerConfigResponse{
 			Diagnostics: diags,
@@ -822,7 +882,7 @@ func TestContext2Validate_provisionerConfig_good(t *testing.T) {
 		Providers: map[addrs.Provider]providers.Factory{
 			addrs.NewDefaultProvider("aws"): testProviderFuncFixed(p),
 		},
-		Provisioners: map[string]ProvisionerFactory{
+		Provisioners: map[string]provisioners.Factory{
 			"shell": testProvisionerFuncFixed(pr),
 		},
 	})
@@ -836,16 +896,17 @@ func TestContext2Validate_provisionerConfig_good(t *testing.T) {
 func TestContext2Validate_requiredVar(t *testing.T) {
 	m := testModule(t, "validate-required-var")
 	p := testProvider("aws")
-	p.GetSchemaReturn = &ProviderSchema{
-		ResourceTypes: map[string]*configschema.Block{
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		ResourceTypes: map[string]providers.Schema{
 			"aws_instance": {
-				Attributes: map[string]*configschema.Attribute{
-					"ami": {Type: cty.String, Optional: true},
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{
+						"ami": {Type: cty.String, Optional: true},
+					},
 				},
 			},
 		},
 	}
-
 	_, diags := NewContext(&ContextOpts{
 		Config: m,
 		Providers: map[addrs.Provider]providers.Factory{
@@ -861,16 +922,17 @@ func TestContext2Validate_requiredVar(t *testing.T) {
 func TestContext2Validate_resourceConfig_bad(t *testing.T) {
 	m := testModule(t, "validate-bad-rc")
 	p := testProvider("aws")
-	p.GetSchemaReturn = &ProviderSchema{
-		ResourceTypes: map[string]*configschema.Block{
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		ResourceTypes: map[string]providers.Schema{
 			"aws_instance": {
-				Attributes: map[string]*configschema.Attribute{
-					"foo": {Type: cty.String, Optional: true},
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{
+						"foo": {Type: cty.String, Optional: true},
+					},
 				},
 			},
 		},
 	}
-
 	c := testContext2(t, &ContextOpts{
 		Config: m,
 		Providers: map[addrs.Provider]providers.Factory{
@@ -878,7 +940,7 @@ func TestContext2Validate_resourceConfig_bad(t *testing.T) {
 		},
 	})
 
-	p.ValidateResourceTypeConfigResponse = providers.ValidateResourceTypeConfigResponse{
+	p.ValidateResourceConfigResponse = &providers.ValidateResourceConfigResponse{
 		Diagnostics: tfdiags.Diagnostics{}.Append(fmt.Errorf("bad")),
 	}
 
@@ -891,16 +953,17 @@ func TestContext2Validate_resourceConfig_bad(t *testing.T) {
 func TestContext2Validate_resourceConfig_good(t *testing.T) {
 	m := testModule(t, "validate-bad-rc")
 	p := testProvider("aws")
-	p.GetSchemaReturn = &ProviderSchema{
-		ResourceTypes: map[string]*configschema.Block{
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		ResourceTypes: map[string]providers.Schema{
 			"aws_instance": {
-				Attributes: map[string]*configschema.Attribute{
-					"foo": {Type: cty.String, Optional: true},
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{
+						"foo": {Type: cty.String, Optional: true},
+					},
 				},
 			},
 		},
 	}
-
 	c := testContext2(t, &ContextOpts{
 		Config: m,
 		Providers: map[addrs.Provider]providers.Factory{
@@ -916,12 +979,14 @@ func TestContext2Validate_resourceConfig_good(t *testing.T) {
 
 func TestContext2Validate_tainted(t *testing.T) {
 	p := testProvider("aws")
-	p.GetSchemaReturn = &ProviderSchema{
-		ResourceTypes: map[string]*configschema.Block{
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		ResourceTypes: map[string]providers.Schema{
 			"aws_instance": {
-				Attributes: map[string]*configschema.Attribute{
-					"foo": {Type: cty.String, Optional: true},
-					"num": {Type: cty.String, Optional: true},
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{
+						"foo": {Type: cty.String, Optional: true},
+						"num": {Type: cty.String, Optional: true},
+					},
 				},
 			},
 		},
@@ -940,12 +1005,12 @@ func TestContext2Validate_tainted(t *testing.T) {
 		State: state,
 	})
 
-	p.ValidateResourceTypeConfigFn = func(req providers.ValidateResourceTypeConfigRequest) providers.ValidateResourceTypeConfigResponse {
+	p.ValidateResourceConfigFn = func(req providers.ValidateResourceConfigRequest) providers.ValidateResourceConfigResponse {
 		var diags tfdiags.Diagnostics
 		if req.Config.GetAttr("foo").IsNull() {
-			diags.Append(errors.New("foo is not set"))
+			diags = diags.Append(errors.New("foo is not set"))
 		}
-		return providers.ValidateResourceTypeConfigResponse{
+		return providers.ValidateResourceConfigResponse{
 			Diagnostics: diags,
 		}
 	}
@@ -960,14 +1025,14 @@ func TestContext2Validate_targetedDestroy(t *testing.T) {
 	m := testModule(t, "validate-targeted")
 	p := testProvider("aws")
 	pr := simpleMockProvisioner()
-	p.ApplyResourceChangeFn = testApplyFn
-	p.PlanResourceChangeFn = testDiffFn
-	p.GetSchemaReturn = &ProviderSchema{
-		ResourceTypes: map[string]*configschema.Block{
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		ResourceTypes: map[string]providers.Schema{
 			"aws_instance": {
-				Attributes: map[string]*configschema.Attribute{
-					"foo": {Type: cty.String, Optional: true},
-					"num": {Type: cty.String, Optional: true},
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{
+						"foo": {Type: cty.String, Optional: true},
+						"num": {Type: cty.String, Optional: true},
+					},
 				},
 			},
 		},
@@ -983,7 +1048,7 @@ func TestContext2Validate_targetedDestroy(t *testing.T) {
 		Providers: map[addrs.Provider]providers.Factory{
 			addrs.NewDefaultProvider("aws"): testProviderFuncFixed(p),
 		},
-		Provisioners: map[string]ProvisionerFactory{
+		Provisioners: map[string]provisioners.Factory{
 			"shell": testProvisionerFuncFixed(pr),
 		},
 		State: state,
@@ -992,7 +1057,7 @@ func TestContext2Validate_targetedDestroy(t *testing.T) {
 				addrs.ManagedResourceMode, "aws_instance", "foo",
 			),
 		},
-		Destroy: true,
+		PlanMode: plans.DestroyMode,
 	})
 
 	diags := ctx.Validate()
@@ -1004,11 +1069,13 @@ func TestContext2Validate_targetedDestroy(t *testing.T) {
 func TestContext2Validate_varRefUnknown(t *testing.T) {
 	m := testModule(t, "validate-variable-ref")
 	p := testProvider("aws")
-	p.GetSchemaReturn = &ProviderSchema{
-		ResourceTypes: map[string]*configschema.Block{
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		ResourceTypes: map[string]providers.Schema{
 			"aws_instance": {
-				Attributes: map[string]*configschema.Attribute{
-					"foo": {Type: cty.String, Optional: true},
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{
+						"foo": {Type: cty.String, Optional: true},
+					},
 				},
 			},
 		},
@@ -1027,9 +1094,9 @@ func TestContext2Validate_varRefUnknown(t *testing.T) {
 	})
 
 	var value cty.Value
-	p.ValidateResourceTypeConfigFn = func(req providers.ValidateResourceTypeConfigRequest) providers.ValidateResourceTypeConfigResponse {
+	p.ValidateResourceConfigFn = func(req providers.ValidateResourceConfigRequest) providers.ValidateResourceConfigResponse {
 		value = req.Config.GetAttr("foo")
-		return providers.ValidateResourceTypeConfigResponse{}
+		return providers.ValidateResourceConfigResponse{}
 	}
 
 	c.Validate()
@@ -1049,13 +1116,13 @@ func TestContext2Validate_interpolateVar(t *testing.T) {
 
 	m := testModule(t, "input-interpolate-var")
 	p := testProvider("null")
-	p.ApplyResourceChangeFn = testApplyFn
-	p.PlanResourceChangeFn = testDiffFn
-	p.GetSchemaReturn = &ProviderSchema{
-		ResourceTypes: map[string]*configschema.Block{
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		ResourceTypes: map[string]providers.Schema{
 			"template_file": {
-				Attributes: map[string]*configschema.Attribute{
-					"template": {Type: cty.String, Optional: true},
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{
+						"template": {Type: cty.String, Optional: true},
+					},
 				},
 			},
 		},
@@ -1082,13 +1149,13 @@ func TestContext2Validate_interpolateComputedModuleVarDef(t *testing.T) {
 
 	m := testModule(t, "validate-computed-module-var-ref")
 	p := testProvider("aws")
-	p.ApplyResourceChangeFn = testApplyFn
-	p.PlanResourceChangeFn = testDiffFn
-	p.GetSchemaReturn = &ProviderSchema{
-		ResourceTypes: map[string]*configschema.Block{
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		ResourceTypes: map[string]providers.Schema{
 			"aws_instance": {
-				Attributes: map[string]*configschema.Attribute{
-					"attr": {Type: cty.String, Optional: true},
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{
+						"attr": {Type: cty.String, Optional: true},
+					},
 				},
 			},
 		},
@@ -1114,8 +1181,6 @@ func TestContext2Validate_interpolateMap(t *testing.T) {
 
 	m := testModule(t, "issue-9549")
 	p := testProvider("template")
-	p.ApplyResourceChangeFn = testApplyFn
-	p.PlanResourceChangeFn = testDiffFn
 
 	ctx := testContext2(t, &ContextOpts{
 		Config: m,
@@ -1128,6 +1193,71 @@ func TestContext2Validate_interpolateMap(t *testing.T) {
 	diags := ctx.Validate()
 	if diags.HasErrors() {
 		t.Fatalf("unexpected error: %s", diags.Err())
+	}
+}
+
+func TestContext2Validate_varSensitive(t *testing.T) {
+	// Smoke test through validate where a variable has sensitive applied
+	m := testModuleInline(t, map[string]string{
+		"main.tf": `
+variable "foo" {
+  default = "xyz"
+  sensitive = true
+}
+
+variable "bar" {
+  sensitive = true
+}
+
+data "aws_data_source" "bar" {
+  foo = var.bar
+}
+
+resource "aws_instance" "foo" {
+  foo = var.foo
+}
+`,
+	})
+
+	p := testProvider("aws")
+	p.ValidateResourceConfigFn = func(req providers.ValidateResourceConfigRequest) providers.ValidateResourceConfigResponse {
+		// Providers receive unmarked values
+		if got, want := req.Config.GetAttr("foo"), cty.UnknownVal(cty.String); !got.RawEquals(want) {
+			t.Fatalf("wrong value for foo\ngot:  %#v\nwant: %#v", got, want)
+		}
+		return providers.ValidateResourceConfigResponse{}
+	}
+	p.ValidateDataResourceConfigFn = func(req providers.ValidateDataResourceConfigRequest) (resp providers.ValidateDataResourceConfigResponse) {
+		if got, want := req.Config.GetAttr("foo"), cty.UnknownVal(cty.String); !got.RawEquals(want) {
+			t.Fatalf("wrong value for foo\ngot:  %#v\nwant: %#v", got, want)
+		}
+		return providers.ValidateDataResourceConfigResponse{}
+	}
+
+	ctx := testContext2(t, &ContextOpts{
+		Config: m,
+		Providers: map[addrs.Provider]providers.Factory{
+			addrs.NewDefaultProvider("aws"): testProviderFuncFixed(p),
+		},
+		Variables: InputValues{
+			"bar": &InputValue{
+				Value:      cty.StringVal("boop"),
+				SourceType: ValueFromCaller,
+			},
+		},
+	})
+
+	diags := ctx.Validate()
+	if diags.HasErrors() {
+		t.Fatal(diags.Err())
+	}
+
+	if !p.ValidateResourceConfigCalled {
+		t.Fatal("expected ValidateResourceConfigFn to be called")
+	}
+
+	if !p.ValidateDataResourceConfigCalled {
+		t.Fatal("expected ValidateDataSourceConfigFn to be called")
 	}
 }
 
@@ -1208,7 +1338,7 @@ output "out" {
 	}
 	// Should get this error:
 	// Unsupported attribute: This object does not have an attribute named "missing"
-	if got, want := diags.Err().Error(), "Unsupported attribute"; strings.Index(got, want) == -1 {
+	if got, want := diags.Err().Error(), "Unsupported attribute"; !strings.Contains(got, want) {
 		t.Fatalf("wrong error:\ngot:  %s\nwant: message containing %q", got, want)
 	}
 }
@@ -1245,8 +1375,40 @@ resource "aws_instance" "foo" {
 	}
 	// Should get this error:
 	// Unsupported attribute: This object does not have an attribute named "missing"
-	if got, want := diags.Err().Error(), "Unsupported attribute"; strings.Index(got, want) == -1 {
+	if got, want := diags.Err().Error(), "Unsupported attribute"; !strings.Contains(got, want) {
 		t.Fatalf("wrong error:\ngot:  %s\nwant: message containing %q", got, want)
+	}
+}
+
+func TestContext2Validate_sensitiveRootModuleOutput(t *testing.T) {
+	m := testModuleInline(t, map[string]string{
+		"child/main.tf": `
+variable "foo" {
+  default = "xyz"
+  sensitive = true
+}
+
+output "out" {
+  value = var.foo
+}`,
+		"main.tf": `
+module "child" {
+  source = "./child"
+}
+
+output "root" {
+  value = module.child.out
+  sensitive = true
+}`,
+	})
+
+	ctx := testContext2(t, &ContextOpts{
+		Config: m,
+	})
+
+	diags := ctx.Validate()
+	if diags.HasErrors() {
+		t.Fatal(diags.Err())
 	}
 }
 
@@ -1274,7 +1436,7 @@ output "out" {
 	}
 	// Should get this error:
 	// Invalid resource count attribute: The special "count" attribute is no longer supported after Terraform v0.12. Instead, use length(aws_instance.test) to count resource instances.
-	if got, want := diags.Err().Error(), "Invalid resource count attribute:"; strings.Index(got, want) == -1 {
+	if got, want := diags.Err().Error(), "Invalid resource count attribute:"; !strings.Contains(got, want) {
 		t.Fatalf("wrong error:\ngot:  %s\nwant: message containing %q", got, want)
 	}
 }
@@ -1305,7 +1467,7 @@ output "out" {
 	}
 	// Should get this error:
 	// Reference to undeclared module: No module call named "foo" is declared in the root module.
-	if got, want := diags.Err().Error(), "Reference to undeclared module:"; strings.Index(got, want) == -1 {
+	if got, want := diags.Err().Error(), "Reference to undeclared module:"; !strings.Contains(got, want) {
 		t.Fatalf("wrong error:\ngot:  %s\nwant: message containing %q", got, want)
 	}
 }
@@ -1336,7 +1498,7 @@ output "out" {
 	}
 	// Should get this error:
 	// Reference to undeclared module: No module call named "foo" is declared in the root module.
-	if got, want := diags.Err().Error(), "Reference to undeclared module:"; strings.Index(got, want) == -1 {
+	if got, want := diags.Err().Error(), "Reference to undeclared module:"; !strings.Contains(got, want) {
 		t.Fatalf("wrong error:\ngot:  %s\nwant: message containing %q", got, want)
 	}
 }
@@ -1366,7 +1528,7 @@ resource "test_instance" "bar" {
 	}
 	// Should get this error:
 	// Reference to undeclared module: No module call named "foo" is declared in the root module.
-	if got, want := diags.Err().Error(), "Reference to undeclared resource:"; strings.Index(got, want) == -1 {
+	if got, want := diags.Err().Error(), "Reference to undeclared resource:"; !strings.Contains(got, want) {
 		t.Fatalf("wrong error:\ngot:  %s\nwant: message containing %q", got, want)
 	}
 }
@@ -1399,7 +1561,7 @@ resource "test_instance" "bar" {
 	}
 	// Should get this error:
 	// Reference to undeclared module: No module call named "foo" is declared in the root module.
-	if got, want := diags.Err().Error(), `no argument, nested block, or exported attribute named "does_not_exist_in_schema"`; strings.Index(got, want) == -1 {
+	if got, want := diags.Err().Error(), `no argument, nested block, or exported attribute named "does_not_exist_in_schema"`; !strings.Contains(got, want) {
 		t.Fatalf("wrong error:\ngot:  %s\nwant: message containing %q", got, want)
 	}
 }
@@ -1422,7 +1584,7 @@ func TestContext2Validate_variableCustomValidationsFail(t *testing.T) {
 	if !diags.HasErrors() {
 		t.Fatal("succeeded; want errors")
 	}
-	if got, want := diags.Err().Error(), `Invalid value for variable: Value must not be "nope".`; strings.Index(got, want) == -1 {
+	if got, want := diags.Err().Error(), `Invalid value for variable: Value must not be "nope".`; !strings.Contains(got, want) {
 		t.Fatalf("wrong error:\ngot:  %s\nwant: message containing %q", got, want)
 	}
 }
@@ -1514,7 +1676,6 @@ resource "aws_instance" "foo" {
 	})
 
 	p := testProvider("aws")
-	p.PlanResourceChangeFn = testDiffFn
 	ctx := testContext2(t, &ContextOpts{
 		Config: m,
 		Providers: map[addrs.Provider]providers.Factory{
@@ -1543,7 +1704,6 @@ resource "aws_instance" "foo" {
 	})
 
 	p := testProvider("aws")
-	p.PlanResourceChangeFn = testDiffFn
 	ctx := testContext2(t, &ContextOpts{
 		Config: m,
 		Providers: map[addrs.Provider]providers.Factory{
@@ -1555,7 +1715,7 @@ resource "aws_instance" "foo" {
 	if !diags.HasErrors() {
 		t.Fatal("succeeded; want errors")
 	}
-	if got, want := diags.Err().Error(), `Invalid count argument`; strings.Index(got, want) == -1 {
+	if got, want := diags.Err().Error(), `Invalid count argument`; !strings.Contains(got, want) {
 		t.Fatalf("wrong error:\ngot:  %s\nwant: message containing %q", got, want)
 	}
 }
@@ -1575,7 +1735,6 @@ resource "aws_instance" "foo" {
 	})
 
 	p := testProvider("aws")
-	p.PlanResourceChangeFn = testDiffFn
 	ctx := testContext2(t, &ContextOpts{
 		Config: m,
 		Providers: map[addrs.Provider]providers.Factory{
@@ -1587,7 +1746,7 @@ resource "aws_instance" "foo" {
 	if !diags.HasErrors() {
 		t.Fatal("succeeded; want errors")
 	}
-	if got, want := diags.Err().Error(), `Invalid for_each argument`; strings.Index(got, want) == -1 {
+	if got, want := diags.Err().Error(), `Invalid for_each argument`; !strings.Contains(got, want) {
 		t.Fatalf("wrong error:\ngot:  %s\nwant: message containing %q", got, want)
 	}
 }
@@ -1658,7 +1817,6 @@ output "out" {
 	})
 
 	p := testProvider("aws")
-	p.PlanResourceChangeFn = testDiffFn
 	ctx := testContext2(t, &ContextOpts{
 		Config: m,
 		Providers: map[addrs.Provider]providers.Factory{
@@ -1752,29 +1910,30 @@ output "out" {
 	}
 }
 
-func TestContext2Validate_invalidIgnoreChanges(t *testing.T) {
+func TestContext2Validate_rpcDiagnostics(t *testing.T) {
 	// validate module and output depends_on
 	m := testModuleInline(t, map[string]string{
 		"main.tf": `
 resource "test_instance" "a" {
-  lifecycle {
-    ignore_changes = [foo]
-  }
 }
-
 `,
 	})
 
 	p := testProvider("test")
-	p.GetSchemaReturn = &ProviderSchema{
-		ResourceTypes: map[string]*configschema.Block{
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		ResourceTypes: map[string]providers.Schema{
 			"test_instance": {
-				Attributes: map[string]*configschema.Attribute{
-					"id":  {Type: cty.String, Computed: true},
-					"foo": {Type: cty.String, Computed: true, Optional: true},
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{
+						"id": {Type: cty.String, Computed: true},
+					},
 				},
 			},
 		},
+	}
+
+	p.ValidateResourceConfigResponse = &providers.ValidateResourceConfigResponse{
+		Diagnostics: tfdiags.Diagnostics(nil).Append(tfdiags.SimpleWarning("don't frobble")),
 	}
 
 	ctx := testContext2(t, &ContextOpts{
@@ -1784,14 +1943,221 @@ resource "test_instance" "a" {
 		},
 	})
 	diags := ctx.Validate()
-	if !diags.HasErrors() {
-		t.Fatal("succeeded; want errors")
+	if diags.HasErrors() {
+		t.Fatal(diags.Err())
+	}
+
+	if len(diags) == 0 {
+		t.Fatal("expected warnings")
 	}
 
 	for _, d := range diags {
 		des := d.Description().Summary
-		if !strings.Contains(des, "Cannot ignore") {
-			t.Fatalf(`expected "Invalid depends_on reference", got %q`, des)
+		if !strings.Contains(des, "frobble") {
+			t.Fatalf(`expected frobble, got %q`, des)
 		}
+	}
+}
+
+func TestContext2Validate_sensitiveProvisionerConfig(t *testing.T) {
+	m := testModule(t, "validate-sensitive-provisioner-config")
+	p := testProvider("aws")
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		ResourceTypes: map[string]providers.Schema{
+			"aws_instance": {
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{
+						"foo": {Type: cty.String, Optional: true},
+					},
+				},
+			},
+		},
+	}
+
+	pr := simpleMockProvisioner()
+
+	c := testContext2(t, &ContextOpts{
+		Config: m,
+		Providers: map[addrs.Provider]providers.Factory{
+			addrs.NewDefaultProvider("aws"): testProviderFuncFixed(p),
+		},
+		Provisioners: map[string]provisioners.Factory{
+			"test": testProvisionerFuncFixed(pr),
+		},
+	})
+
+	pr.ValidateProvisionerConfigFn = func(r provisioners.ValidateProvisionerConfigRequest) provisioners.ValidateProvisionerConfigResponse {
+		if r.Config.ContainsMarked() {
+			t.Errorf("provisioner config contains marked values")
+		}
+		return pr.ValidateProvisionerConfigResponse
+	}
+
+	diags := c.Validate()
+	if diags.HasErrors() {
+		t.Fatalf("unexpected error: %s", diags.Err())
+	}
+	if !pr.ValidateProvisionerConfigCalled {
+		t.Fatal("ValidateProvisionerConfig not called")
+	}
+}
+
+func TestContext2Plan_validateMinMaxDynamicBlock(t *testing.T) {
+	p := new(MockProvider)
+	p.GetProviderSchemaResponse = getProviderSchemaResponseFromProviderSchema(&ProviderSchema{
+		ResourceTypes: map[string]*configschema.Block{
+			"test_instance": {
+				Attributes: map[string]*configschema.Attribute{
+					"id": {
+						Type:     cty.String,
+						Computed: true,
+					},
+					"things": {
+						Type:     cty.List(cty.String),
+						Computed: true,
+					},
+				},
+				BlockTypes: map[string]*configschema.NestedBlock{
+					"foo": {
+						Block: configschema.Block{
+							Attributes: map[string]*configschema.Attribute{
+								"bar": {Type: cty.String, Optional: true},
+							},
+						},
+						Nesting:  configschema.NestingList,
+						MinItems: 2,
+						MaxItems: 3,
+					},
+				},
+			},
+		},
+	})
+
+	m := testModuleInline(t, map[string]string{
+		"main.tf": `
+resource "test_instance" "a" {
+  // MinItems 2
+  foo {
+    bar = "a"
+  }
+  foo {
+    bar = "b"
+  }
+}
+
+resource "test_instance" "b" {
+  // one dymamic block can satisfy MinItems of 2
+  dynamic "foo" {
+	for_each = test_instance.a.things
+	content {
+	  bar = foo.value
+	}
+  }
+}
+
+resource "test_instance" "c" {
+  // we may have more than MaxItems dynamic blocks when they are unknown
+  foo {
+    bar = "b"
+  }
+  dynamic "foo" {
+    for_each = test_instance.a.things
+    content {
+      bar = foo.value
+    }
+  }
+  dynamic "foo" {
+    for_each = test_instance.a.things
+    content {
+      bar = "${foo.value}-2"
+    }
+  }
+  dynamic "foo" {
+    for_each = test_instance.b.things
+    content {
+      bar = foo.value
+    }
+  }
+}
+`})
+
+	ctx := testContext2(t, &ContextOpts{
+		Config: m,
+		Providers: map[addrs.Provider]providers.Factory{
+			addrs.NewDefaultProvider("test"): testProviderFuncFixed(p),
+		},
+	})
+
+	diags := ctx.Validate()
+	if diags.HasErrors() {
+		t.Fatal(diags.ErrWithWarnings())
+	}
+}
+
+func TestContext2Validate_passInheritedProvider(t *testing.T) {
+	m := testModuleInline(t, map[string]string{
+		"main.tf": `
+terraform {
+  required_providers {
+	test = {
+	  source = "hashicorp/test"
+	}
+  }
+}
+
+module "first" {
+  source = "./first"
+  providers = {
+    test = test
+  }
+}
+`,
+
+		// This module does not define a config for the test provider, but we
+		// should be able to pass whatever the implied config is to a child
+		// module.
+		"first/main.tf": `
+terraform {
+  required_providers {
+    test = {
+	  source = "hashicorp/test"
+    }
+  }
+}
+
+module "second" {
+  source = "./second"
+  providers = {
+	test.alias = test
+  }
+}`,
+
+		"first/second/main.tf": `
+terraform {
+  required_providers {
+    test = {
+	  source = "hashicorp/test"
+      configuration_aliases = [test.alias]
+    }
+  }
+}
+
+resource "test_object" "t" {
+  provider = test.alias
+}
+`,
+	})
+
+	p := simpleMockProvider()
+	ctx := testContext2(t, &ContextOpts{
+		Config: m,
+		Providers: map[addrs.Provider]providers.Factory{
+			addrs.NewDefaultProvider("test"): testProviderFuncFixed(p),
+		},
+	})
+
+	diags := ctx.Validate()
+	if diags.HasErrors() {
+		t.Fatal(diags.ErrWithWarnings())
 	}
 }

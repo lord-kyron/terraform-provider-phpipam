@@ -13,6 +13,7 @@ import (
 
 	tfe "github.com/hashicorp/go-tfe"
 	"github.com/hashicorp/terraform/backend"
+	"github.com/hashicorp/terraform/plans"
 	"github.com/hashicorp/terraform/terraform"
 )
 
@@ -22,6 +23,13 @@ var (
 	errRunApproved      = errors.New("approved using the UI or API")
 	errRunDiscarded     = errors.New("discarded using the UI or API")
 	errRunOverridden    = errors.New("overridden using the UI or API")
+)
+
+var (
+	backoffMin = 1000.0
+	backoffMax = 3000.0
+
+	runPollInterval = 3 * time.Second
 )
 
 // backoff will perform exponential backoff based on the iteration and
@@ -43,7 +51,7 @@ func (b *Remote) waitForRun(stopCtx, cancelCtx context.Context, op *backend.Oper
 			return r, stopCtx.Err()
 		case <-cancelCtx.Done():
 			return r, cancelCtx.Err()
-		case <-time.After(backoff(1000, 3000, i)):
+		case <-time.After(backoff(backoffMin, backoffMax, i)):
 			// Timer up, show status
 		}
 
@@ -243,15 +251,7 @@ func (b *Remote) costEstimate(stopCtx, cancelCtx context.Context, op *backend.Op
 		return nil
 	}
 
-	if b.CLI != nil {
-		b.CLI.Output("\n------------------------------------------------------------------------\n")
-	}
-
 	msgPrefix := "Cost estimation"
-	if b.CLI != nil {
-		b.CLI.Output(b.Colorize().Color(msgPrefix + ":\n"))
-	}
-
 	started := time.Now()
 	updated := started
 	for i := 0; ; i++ {
@@ -260,7 +260,7 @@ func (b *Remote) costEstimate(stopCtx, cancelCtx context.Context, op *backend.Op
 			return stopCtx.Err()
 		case <-cancelCtx.Done():
 			return cancelCtx.Err()
-		case <-time.After(1 * time.Second):
+		case <-time.After(backoff(backoffMin, backoffMax, i)):
 		}
 
 		// Retrieve the cost estimate to get its current status.
@@ -275,6 +275,12 @@ func (b *Remote) costEstimate(stopCtx, cancelCtx context.Context, op *backend.Op
 			if r.Status == tfe.RunCanceled || r.Status == tfe.RunErrored {
 				return nil
 			}
+		}
+
+		// checking if i == 0 so as to avoid printing this starting horizontal-rule
+		// every retry, and that it only prints it on the first (i=0) attempt.
+		if b.CLI != nil && i == 0 {
+			b.CLI.Output("\n------------------------------------------------------------------------\n")
 		}
 
 		switch ce.Status {
@@ -292,6 +298,7 @@ func (b *Remote) costEstimate(stopCtx, cancelCtx context.Context, op *backend.Op
 			deltaRepr := strings.Replace(ce.DeltaMonthlyCost, "-", "", 1)
 
 			if b.CLI != nil {
+				b.CLI.Output(b.Colorize().Color(msgPrefix + ":\n"))
 				b.CLI.Output(b.Colorize().Color(fmt.Sprintf("Resources: %d of %d estimated", ce.MatchedResourcesCount, ce.ResourcesCount)))
 				b.CLI.Output(b.Colorize().Color(fmt.Sprintf("           $%s/mo %s$%s", ce.ProposedMonthlyCost, sign, deltaRepr)))
 
@@ -313,16 +320,17 @@ func (b *Remote) costEstimate(stopCtx, cancelCtx context.Context, op *backend.Op
 					elapsed = fmt.Sprintf(
 						" (%s elapsed)", current.Sub(started).Truncate(30*time.Second))
 				}
+				b.CLI.Output(b.Colorize().Color(msgPrefix + ":\n"))
 				b.CLI.Output(b.Colorize().Color("Waiting for cost estimate to complete..." + elapsed + "\n"))
 			}
 			continue
 		case tfe.CostEstimateSkippedDueToTargeting:
+			b.CLI.Output(b.Colorize().Color(msgPrefix + ":\n"))
 			b.CLI.Output("Not available for this plan, because it was created with the -target option.")
 			b.CLI.Output("\n------------------------------------------------------------------------")
 			return nil
 		case tfe.CostEstimateErrored:
-			b.CLI.Output(msgPrefix + " errored:\n")
-			b.CLI.Output(ce.ErrorMessage)
+			b.CLI.Output(msgPrefix + " errored.\n")
 			b.CLI.Output("\n------------------------------------------------------------------------")
 			return nil
 		case tfe.CostEstimateCanceled:
@@ -407,33 +415,44 @@ func (b *Remote) checkPolicy(stopCtx, cancelCtx context.Context, op *backend.Ope
 		case tfe.PolicyHardFailed:
 			return fmt.Errorf(msgPrefix + " hard failed.")
 		case tfe.PolicySoftFailed:
+			runUrl := fmt.Sprintf(runHeader, b.hostname, b.organization, op.Workspace, r.ID)
+
 			if op.Type == backend.OperationTypePlan || op.UIOut == nil || op.UIIn == nil ||
-				op.AutoApprove || !pc.Actions.IsOverridable || !pc.Permissions.CanOverride {
-				return fmt.Errorf(msgPrefix + " soft failed.")
+				!pc.Actions.IsOverridable || !pc.Permissions.CanOverride {
+				return fmt.Errorf(msgPrefix + " soft failed.\n" + runUrl)
+			}
+
+			if op.AutoApprove {
+				if _, err = b.client.PolicyChecks.Override(stopCtx, pc.ID); err != nil {
+					return generalError(fmt.Sprintf("Failed to override policy check.\n%s", runUrl), err)
+				}
+			} else {
+				opts := &terraform.InputOpts{
+					Id:          "override",
+					Query:       "\nDo you want to override the soft failed policy check?",
+					Description: "Only 'override' will be accepted to override.",
+				}
+				err = b.confirm(stopCtx, op, opts, r, "override")
+				if err != nil && err != errRunOverridden {
+					return fmt.Errorf(
+						fmt.Sprintf("Failed to override: %s\n%s\n", err.Error(), runUrl),
+					)
+				}
+
+				if err != errRunOverridden {
+					if _, err = b.client.PolicyChecks.Override(stopCtx, pc.ID); err != nil {
+						return generalError(fmt.Sprintf("Failed to override policy check.\n%s", runUrl), err)
+					}
+				} else {
+					b.CLI.Output(fmt.Sprintf("The run needs to be manually overridden or discarded.\n%s\n", runUrl))
+				}
+			}
+
+			if b.CLI != nil {
+				b.CLI.Output("------------------------------------------------------------------------")
 			}
 		default:
 			return fmt.Errorf("Unknown or unexpected policy state: %s", pc.Status)
-		}
-
-		opts := &terraform.InputOpts{
-			Id:          "override",
-			Query:       "\nDo you want to override the soft failed policy check?",
-			Description: "Only 'override' will be accepted to override.",
-		}
-
-		err = b.confirm(stopCtx, op, opts, r, "override")
-		if err != nil && err != errRunOverridden {
-			return err
-		}
-
-		if err != errRunOverridden {
-			if _, err = b.client.PolicyChecks.Override(stopCtx, pc.ID); err != nil {
-				return generalError("Failed to override policy check", err)
-			}
-		}
-
-		if b.CLI != nil {
-			b.CLI.Output("------------------------------------------------------------------------")
 		}
 	}
 
@@ -455,7 +474,7 @@ func (b *Remote) confirm(stopCtx context.Context, op *backend.Operation, opts *t
 				return
 			case <-stopCtx.Done():
 				return
-			case <-time.After(3 * time.Second):
+			case <-time.After(runPollInterval):
 				// Retrieve the run again to get its current status.
 				r, err := b.client.Runs.Read(stopCtx, r.ID)
 				if err != nil {
@@ -489,10 +508,10 @@ func (b *Remote) confirm(stopCtx context.Context, op *backend.Operation, opts *t
 					}
 
 					if err == errRunDiscarded {
-						if op.Destroy {
+						err = errApplyDiscarded
+						if op.PlanMode == plans.DestroyMode {
 							err = errDestroyDiscarded
 						}
-						err = errApplyDiscarded
 					}
 
 					result <- err
@@ -533,7 +552,7 @@ func (b *Remote) confirm(stopCtx context.Context, op *backend.Operation, opts *t
 			if r.Actions.IsDiscardable {
 				err = b.client.Runs.Discard(stopCtx, r.ID, tfe.RunDiscardOptions{})
 				if err != nil {
-					if op.Destroy {
+					if op.PlanMode == plans.DestroyMode {
 						return generalError("Failed to discard destroy", err)
 					}
 					return generalError("Failed to discard apply", err)
@@ -542,7 +561,7 @@ func (b *Remote) confirm(stopCtx context.Context, op *backend.Operation, opts *t
 
 			// Even if the run was discarded successfully, we still
 			// return an error as the apply command was canceled.
-			if op.Destroy {
+			if op.PlanMode == plans.DestroyMode {
 				return errDestroyDiscarded
 			}
 			return errApplyDiscarded

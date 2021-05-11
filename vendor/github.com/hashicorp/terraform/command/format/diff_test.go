@@ -7,7 +7,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/hashicorp/terraform/addrs"
 	"github.com/hashicorp/terraform/configs/configschema"
-	"github.com/hashicorp/terraform/helper/experiment"
 	"github.com/hashicorp/terraform/plans"
 	"github.com/mitchellh/colorstring"
 	"github.com/zclconf/go-cty/cty"
@@ -28,7 +27,6 @@ func TestResourceChange_primitiveTypes(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be created
   + resource "test_instance" "example" {
       + id = (known after apply)
@@ -48,7 +46,6 @@ func TestResourceChange_primitiveTypes(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be created
   + resource "test_instance" "example" {
       + string = "null"
@@ -68,7 +65,6 @@ func TestResourceChange_primitiveTypes(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be created
   + resource "test_instance" "example" {
       + string = "null "
@@ -88,7 +84,6 @@ func TestResourceChange_primitiveTypes(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be destroyed
   - resource "test_instance" "example" {
       - id = "i-02ae66f368e8518a9" -> null
@@ -110,7 +105,6 @@ func TestResourceChange_primitiveTypes(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be destroyed
   - resource "test_instance" "example" {
       - id = "i-02ae66f368e8518a9" -> null
@@ -135,7 +129,6 @@ func TestResourceChange_primitiveTypes(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ ami = "ami-BEFORE" -> "ami-AFTER"
@@ -144,8 +137,9 @@ func TestResourceChange_primitiveTypes(t *testing.T) {
 `,
 		},
 		"string force-new update": {
-			Action: plans.DeleteThenCreate,
-			Mode:   addrs.ManagedResourceMode,
+			Action:       plans.DeleteThenCreate,
+			ActionReason: plans.ResourceInstanceReplaceBecauseCannotUpdate,
+			Mode:         addrs.ManagedResourceMode,
 			Before: cty.ObjectVal(map[string]cty.Value{
 				"id":  cty.StringVal("i-02ae66f368e8518a9"),
 				"ami": cty.StringVal("ami-BEFORE"),
@@ -163,7 +157,6 @@ func TestResourceChange_primitiveTypes(t *testing.T) {
 			RequiredReplace: cty.NewPathSet(cty.Path{
 				cty.GetAttrStep{Name: "ami"},
 			}),
-			Tainted: false,
 			ExpectedOutput: `  # test_instance.example must be replaced
 -/+ resource "test_instance" "example" {
       ~ ami = "ami-BEFORE" -> "ami-AFTER" # forces replacement
@@ -192,7 +185,6 @@ func TestResourceChange_primitiveTypes(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ ami = "ami-BEFORE" -> "ami-AFTER"
@@ -228,7 +220,6 @@ field
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
@@ -263,7 +254,6 @@ new line
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
@@ -297,7 +287,6 @@ new line
 			RequiredReplace: cty.NewPathSet(cty.Path{
 				cty.GetAttrStep{Name: "more_lines"},
 			}),
-			Tainted: false,
 			ExpectedOutput: `  # test_instance.example must be replaced
 -/+ resource "test_instance" "example" {
       ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
@@ -318,19 +307,35 @@ new line
 			After: cty.ObjectVal(map[string]cty.Value{
 				"id":       cty.UnknownVal(cty.String),
 				"password": cty.StringVal("top-secret"),
+				"conn_info": cty.ObjectVal(map[string]cty.Value{
+					"user":     cty.StringVal("not-secret"),
+					"password": cty.StringVal("top-secret"),
+				}),
 			}),
 			Schema: &configschema.Block{
 				Attributes: map[string]*configschema.Attribute{
 					"id":       {Type: cty.String, Computed: true},
 					"password": {Type: cty.String, Optional: true, Sensitive: true},
+					"conn_info": {
+						NestedType: &configschema.Object{
+							Nesting: configschema.NestingSingle,
+							Attributes: map[string]*configschema.Attribute{
+								"user":     {Type: cty.String, Optional: true},
+								"password": {Type: cty.String, Optional: true, Sensitive: true},
+							},
+						},
+					},
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be created
   + resource "test_instance" "example" {
-      + id       = (known after apply)
-      + password = (sensitive value)
+      + conn_info = {
+        + password = (sensitive value)
+        + user     = "not-secret"
+      }
+      + id        = (known after apply)
+      + password  = (sensitive value)
     }
 `,
 		},
@@ -355,7 +360,6 @@ new line
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id       = "blah" -> (known after apply)
@@ -363,19 +367,13 @@ new line
         # (1 unchanged attribute hidden)
     }
 `,
-			VerboseOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-      ~ id       = "blah" -> (known after apply)
-        password = (sensitive value)
-      ~ str      = "before" -> "after"
-    }
-`,
 		},
 
-		// tainted resources
+		// tainted objects
 		"replace tainted resource": {
-			Action: plans.DeleteThenCreate,
-			Mode:   addrs.ManagedResourceMode,
+			Action:       plans.DeleteThenCreate,
+			ActionReason: plans.ResourceInstanceReplaceBecauseTainted,
+			Mode:         addrs.ManagedResourceMode,
 			Before: cty.ObjectVal(map[string]cty.Value{
 				"id":  cty.StringVal("i-02ae66f368e8518a9"),
 				"ami": cty.StringVal("ami-BEFORE"),
@@ -393,7 +391,6 @@ new line
 			RequiredReplace: cty.NewPathSet(cty.Path{
 				cty.GetAttrStep{Name: "ami"},
 			}),
-			Tainted: true,
 			ExpectedOutput: `  # test_instance.example is tainted, so must be replaced
 -/+ resource "test_instance" "example" {
       ~ ami = "ami-BEFORE" -> "ami-AFTER" # forces replacement
@@ -402,8 +399,9 @@ new line
 `,
 		},
 		"force replacement with empty before value": {
-			Action: plans.DeleteThenCreate,
-			Mode:   addrs.ManagedResourceMode,
+			Action:       plans.DeleteThenCreate,
+			ActionReason: plans.ResourceInstanceReplaceBecauseCannotUpdate,
+			Mode:         addrs.ManagedResourceMode,
 			Before: cty.ObjectVal(map[string]cty.Value{
 				"name":   cty.StringVal("name"),
 				"forced": cty.NullVal(cty.String),
@@ -421,7 +419,6 @@ new line
 			RequiredReplace: cty.NewPathSet(cty.Path{
 				cty.GetAttrStep{Name: "forced"},
 			}),
-			Tainted: false,
 			ExpectedOutput: `  # test_instance.example must be replaced
 -/+ resource "test_instance" "example" {
       + forced = "example" # forces replacement
@@ -430,8 +427,9 @@ new line
 `,
 		},
 		"force replacement with empty before value legacy": {
-			Action: plans.DeleteThenCreate,
-			Mode:   addrs.ManagedResourceMode,
+			Action:       plans.DeleteThenCreate,
+			ActionReason: plans.ResourceInstanceReplaceBecauseCannotUpdate,
+			Mode:         addrs.ManagedResourceMode,
 			Before: cty.ObjectVal(map[string]cty.Value{
 				"name":   cty.StringVal("name"),
 				"forced": cty.StringVal(""),
@@ -449,7 +447,6 @@ new line
 			RequiredReplace: cty.NewPathSet(cty.Path{
 				cty.GetAttrStep{Name: "forced"},
 			}),
-			Tainted: false,
 			ExpectedOutput: `  # test_instance.example must be replaced
 -/+ resource "test_instance" "example" {
       + forced = "example" # forces replacement
@@ -491,7 +488,6 @@ new line
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ ami  = "ami-BEFORE" -> "ami-AFTER"
@@ -501,18 +497,6 @@ new line
             "name" = "bob"
         }
         # (2 unchanged attributes hidden)
-    }
-`,
-			VerboseOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-      ~ ami  = "ami-BEFORE" -> "ami-AFTER"
-        bar  = "bar"
-        foo  = "foo"
-        id   = "i-02ae66f368e8518a9"
-        name = "alice"
-        tags = {
-            "name" = "bob"
-        }
     }
 `,
 		},
@@ -542,7 +526,6 @@ func TestResourceChange_JSON(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be created
   + resource "test_instance" "example" {
       + id         = (known after apply)
@@ -581,7 +564,6 @@ func TestResourceChange_JSON(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
@@ -590,19 +572,6 @@ func TestResourceChange_JSON(t *testing.T) {
               + bbb = "new_value"
               - ccc = 5 -> null
                 # (1 unchanged element hidden)
-            }
-        )
-    }
-`,
-
-			VerboseOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-      ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
-      ~ json_field = jsonencode(
-          ~ {
-                aaa = "value"
-              + bbb = "new_value"
-              - ccc = 5 -> null
             }
         )
     }
@@ -626,7 +595,6 @@ func TestResourceChange_JSON(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
@@ -658,7 +626,6 @@ func TestResourceChange_JSON(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
@@ -690,7 +657,6 @@ func TestResourceChange_JSON(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
@@ -709,8 +675,9 @@ func TestResourceChange_JSON(t *testing.T) {
 `,
 		},
 		"force-new update": {
-			Action: plans.DeleteThenCreate,
-			Mode:   addrs.ManagedResourceMode,
+			Action:       plans.DeleteThenCreate,
+			ActionReason: plans.ResourceInstanceReplaceBecauseCannotUpdate,
+			Mode:         addrs.ManagedResourceMode,
 			Before: cty.ObjectVal(map[string]cty.Value{
 				"id":         cty.StringVal("i-02ae66f368e8518a9"),
 				"json_field": cty.StringVal(`{"aaa": "value"}`),
@@ -728,7 +695,6 @@ func TestResourceChange_JSON(t *testing.T) {
 			RequiredReplace: cty.NewPathSet(cty.Path{
 				cty.GetAttrStep{Name: "json_field"},
 			}),
-			Tainted: false,
 			ExpectedOutput: `  # test_instance.example must be replaced
 -/+ resource "test_instance" "example" {
       ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
@@ -736,17 +702,6 @@ func TestResourceChange_JSON(t *testing.T) {
           ~ {
               + bbb = "new_value"
                 # (1 unchanged element hidden)
-            } # forces replacement
-        )
-    }
-`,
-			VerboseOutput: `  # test_instance.example must be replaced
--/+ resource "test_instance" "example" {
-      ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
-      ~ json_field = jsonencode(
-          ~ {
-                aaa = "value"
-              + bbb = "new_value"
             } # forces replacement
         )
     }
@@ -771,7 +726,6 @@ func TestResourceChange_JSON(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
@@ -785,8 +739,9 @@ func TestResourceChange_JSON(t *testing.T) {
 `,
 		},
 		"force-new update (whitespace change)": {
-			Action: plans.DeleteThenCreate,
-			Mode:   addrs.ManagedResourceMode,
+			Action:       plans.DeleteThenCreate,
+			ActionReason: plans.ResourceInstanceReplaceBecauseCannotUpdate,
+			Mode:         addrs.ManagedResourceMode,
 			Before: cty.ObjectVal(map[string]cty.Value{
 				"id":         cty.StringVal("i-02ae66f368e8518a9"),
 				"json_field": cty.StringVal(`{"aaa": "value", "bbb": "another"}`),
@@ -805,7 +760,6 @@ func TestResourceChange_JSON(t *testing.T) {
 			RequiredReplace: cty.NewPathSet(cty.Path{
 				cty.GetAttrStep{Name: "json_field"},
 			}),
-			Tainted: false,
 			ExpectedOutput: `  # test_instance.example must be replaced
 -/+ resource "test_instance" "example" {
       ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
@@ -833,7 +787,6 @@ func TestResourceChange_JSON(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be created
   + resource "test_instance" "example" {
       + id         = (known after apply)
@@ -859,25 +812,12 @@ func TestResourceChange_JSON(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
       ~ json_field = jsonencode(
           ~ [
                 # (1 unchanged element hidden)
-                "second",
-              - "third",
-            ]
-        )
-    }
-`,
-			VerboseOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-      ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
-      ~ json_field = jsonencode(
-          ~ [
-                "first",
                 "second",
               - "third",
             ]
@@ -903,26 +843,12 @@ func TestResourceChange_JSON(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
       ~ json_field = jsonencode(
           ~ [
                 # (1 unchanged element hidden)
-                "second",
-              + "third",
-            ]
-        )
-    }
-`,
-
-			VerboseOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-      ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
-      ~ json_field = jsonencode(
-          ~ [
-                "first",
                 "second",
               + "third",
             ]
@@ -948,7 +874,6 @@ func TestResourceChange_JSON(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
@@ -983,7 +908,6 @@ func TestResourceChange_JSON(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
@@ -1016,7 +940,6 @@ func TestResourceChange_JSON(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
@@ -1051,7 +974,6 @@ func TestResourceChange_JSON(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
@@ -1089,7 +1011,6 @@ func TestResourceChange_JSON(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
@@ -1126,7 +1047,6 @@ func TestResourceChange_JSON(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
@@ -1163,7 +1083,6 @@ func TestResourceChange_JSON(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
@@ -1214,7 +1133,6 @@ func TestResourceChange_primitiveList(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
@@ -1222,15 +1140,6 @@ func TestResourceChange_primitiveList(t *testing.T) {
           + "new-element",
         ]
         # (1 unchanged attribute hidden)
-    }
-`,
-			VerboseOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-        ami        = "ami-STATIC"
-      ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
-      + list_field = [
-          + "new-element",
-        ]
     }
 `,
 		},
@@ -1257,7 +1166,6 @@ func TestResourceChange_primitiveList(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
@@ -1265,15 +1173,6 @@ func TestResourceChange_primitiveList(t *testing.T) {
           + "new-element",
         ]
         # (1 unchanged attribute hidden)
-    }
-`,
-			VerboseOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-        ami        = "ami-STATIC"
-      ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
-      ~ list_field = [
-          + "new-element",
-        ]
     }
 `,
 		},
@@ -1311,7 +1210,6 @@ func TestResourceChange_primitiveList(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
@@ -1325,24 +1223,11 @@ func TestResourceChange_primitiveList(t *testing.T) {
         # (1 unchanged attribute hidden)
     }
 `,
-			VerboseOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-        ami        = "ami-STATIC"
-      ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
-      ~ list_field = [
-            "aaaa",
-            "bbbb",
-          + "cccc",
-            "dddd",
-            "eeee",
-            "ffff",
-        ]
-    }
-`,
 		},
 		"force-new update - insertion": {
-			Action: plans.DeleteThenCreate,
-			Mode:   addrs.ManagedResourceMode,
+			Action:       plans.DeleteThenCreate,
+			ActionReason: plans.ResourceInstanceReplaceBecauseCannotUpdate,
+			Mode:         addrs.ManagedResourceMode,
 			Before: cty.ObjectVal(map[string]cty.Value{
 				"id":  cty.StringVal("i-02ae66f368e8518a9"),
 				"ami": cty.StringVal("ami-STATIC"),
@@ -1370,7 +1255,6 @@ func TestResourceChange_primitiveList(t *testing.T) {
 			RequiredReplace: cty.NewPathSet(cty.Path{
 				cty.GetAttrStep{Name: "list_field"},
 			}),
-			Tainted: false,
 			ExpectedOutput: `  # test_instance.example must be replaced
 -/+ resource "test_instance" "example" {
       ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
@@ -1380,17 +1264,6 @@ func TestResourceChange_primitiveList(t *testing.T) {
             "cccc",
         ]
         # (1 unchanged attribute hidden)
-    }
-`,
-			VerboseOutput: `  # test_instance.example must be replaced
--/+ resource "test_instance" "example" {
-        ami        = "ami-STATIC"
-      ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
-      ~ list_field = [ # forces replacement
-            "aaaa",
-          + "bbbb",
-            "cccc",
-        ]
     }
 `,
 		},
@@ -1425,7 +1298,6 @@ func TestResourceChange_primitiveList(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
@@ -1437,19 +1309,6 @@ func TestResourceChange_primitiveList(t *testing.T) {
             # (1 unchanged element hidden)
         ]
         # (1 unchanged attribute hidden)
-    }
-`,
-			VerboseOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-        ami        = "ami-STATIC"
-      ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
-      ~ list_field = [
-          - "aaaa",
-            "bbbb",
-          - "cccc",
-            "dddd",
-            "eeee",
-        ]
     }
 `,
 		},
@@ -1470,7 +1329,6 @@ func TestResourceChange_primitiveList(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be created
   + resource "test_instance" "example" {
       + ami        = "ami-STATIC"
@@ -1504,7 +1362,6 @@ func TestResourceChange_primitiveList(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
@@ -1514,17 +1371,6 @@ func TestResourceChange_primitiveList(t *testing.T) {
           - "cccc",
         ]
         # (1 unchanged attribute hidden)
-    }
-`,
-			VerboseOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-        ami        = "ami-STATIC"
-      ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
-      ~ list_field = [
-          - "aaaa",
-          - "bbbb",
-          - "cccc",
-        ]
     }
 `,
 		},
@@ -1549,19 +1395,11 @@ func TestResourceChange_primitiveList(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
       + list_field = []
         # (1 unchanged attribute hidden)
-    }
-`,
-			VerboseOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-        ami        = "ami-STATIC"
-      ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
-      + list_field = []
     }
 `,
 		},
@@ -1594,7 +1432,6 @@ func TestResourceChange_primitiveList(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
@@ -1605,18 +1442,6 @@ func TestResourceChange_primitiveList(t *testing.T) {
             "cccc",
         ]
         # (1 unchanged attribute hidden)
-    }
-`,
-			VerboseOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-        ami        = "ami-STATIC"
-      ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
-      ~ list_field = [
-            "aaaa",
-          - "bbbb",
-          + (known after apply),
-            "cccc",
-        ]
     }
 `,
 		},
@@ -1654,7 +1479,6 @@ func TestResourceChange_primitiveList(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
@@ -1667,21 +1491,6 @@ func TestResourceChange_primitiveList(t *testing.T) {
             # (2 unchanged elements hidden)
         ]
         # (1 unchanged attribute hidden)
-    }
-`,
-			VerboseOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-        ami        = "ami-STATIC"
-      ~ id         = "i-02ae66f368e8518a9" -> (known after apply)
-      ~ list_field = [
-            "aaaa",
-          - "bbbb",
-          + (known after apply),
-          + (known after apply),
-            "cccc",
-            "dddd",
-            "eeee",
-        ]
     }
 `,
 		},
@@ -1721,7 +1530,6 @@ func TestResourceChange_primitiveTuple(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
         id          = "i-02ae66f368e8518a9"
@@ -1732,19 +1540,6 @@ func TestResourceChange_primitiveTuple(t *testing.T) {
           + "cccc",
             "eeee",
             # (1 unchanged element hidden)
-        ]
-    }
-`,
-			VerboseOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-        id          = "i-02ae66f368e8518a9"
-      ~ tuple_field = [
-            "aaaa",
-            "bbbb",
-          - "dddd",
-          + "cccc",
-            "eeee",
-            "ffff",
         ]
     }
 `,
@@ -1778,7 +1573,6 @@ func TestResourceChange_primitiveSet(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id        = "i-02ae66f368e8518a9" -> (known after apply)
@@ -1786,15 +1580,6 @@ func TestResourceChange_primitiveSet(t *testing.T) {
           + "new-element",
         ]
         # (1 unchanged attribute hidden)
-    }
-`,
-			VerboseOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-        ami       = "ami-STATIC"
-      ~ id        = "i-02ae66f368e8518a9" -> (known after apply)
-      + set_field = [
-          + "new-element",
-        ]
     }
 `,
 		},
@@ -1821,7 +1606,6 @@ func TestResourceChange_primitiveSet(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id        = "i-02ae66f368e8518a9" -> (known after apply)
@@ -1829,15 +1613,6 @@ func TestResourceChange_primitiveSet(t *testing.T) {
           + "new-element",
         ]
         # (1 unchanged attribute hidden)
-    }
-`,
-			VerboseOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-        ami       = "ami-STATIC"
-      ~ id        = "i-02ae66f368e8518a9" -> (known after apply)
-      ~ set_field = [
-          + "new-element",
-        ]
     }
 `,
 		},
@@ -1869,7 +1644,6 @@ func TestResourceChange_primitiveSet(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id        = "i-02ae66f368e8518a9" -> (known after apply)
@@ -1880,21 +1654,11 @@ func TestResourceChange_primitiveSet(t *testing.T) {
         # (1 unchanged attribute hidden)
     }
 `,
-			VerboseOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-        ami       = "ami-STATIC"
-      ~ id        = "i-02ae66f368e8518a9" -> (known after apply)
-      ~ set_field = [
-            "aaaa",
-          + "bbbb",
-            "cccc",
-        ]
-    }
-`,
 		},
 		"force-new update - insertion": {
-			Action: plans.DeleteThenCreate,
-			Mode:   addrs.ManagedResourceMode,
+			Action:       plans.DeleteThenCreate,
+			ActionReason: plans.ResourceInstanceReplaceBecauseCannotUpdate,
+			Mode:         addrs.ManagedResourceMode,
 			Before: cty.ObjectVal(map[string]cty.Value{
 				"id":  cty.StringVal("i-02ae66f368e8518a9"),
 				"ami": cty.StringVal("ami-STATIC"),
@@ -1922,7 +1686,6 @@ func TestResourceChange_primitiveSet(t *testing.T) {
 			RequiredReplace: cty.NewPathSet(cty.Path{
 				cty.GetAttrStep{Name: "set_field"},
 			}),
-			Tainted: false,
 			ExpectedOutput: `  # test_instance.example must be replaced
 -/+ resource "test_instance" "example" {
       ~ id        = "i-02ae66f368e8518a9" -> (known after apply)
@@ -1931,17 +1694,6 @@ func TestResourceChange_primitiveSet(t *testing.T) {
             # (2 unchanged elements hidden)
         ]
         # (1 unchanged attribute hidden)
-    }
-`,
-			VerboseOutput: `  # test_instance.example must be replaced
--/+ resource "test_instance" "example" {
-        ami       = "ami-STATIC"
-      ~ id        = "i-02ae66f368e8518a9" -> (known after apply)
-      ~ set_field = [ # forces replacement
-            "aaaa",
-          + "bbbb",
-            "cccc",
-        ]
     }
 `,
 		},
@@ -1972,7 +1724,6 @@ func TestResourceChange_primitiveSet(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id        = "i-02ae66f368e8518a9" -> (known after apply)
@@ -1982,17 +1733,6 @@ func TestResourceChange_primitiveSet(t *testing.T) {
             # (1 unchanged element hidden)
         ]
         # (1 unchanged attribute hidden)
-    }
-`,
-			VerboseOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-        ami       = "ami-STATIC"
-      ~ id        = "i-02ae66f368e8518a9" -> (known after apply)
-      ~ set_field = [
-          - "aaaa",
-            "bbbb",
-          - "cccc",
-        ]
     }
 `,
 		},
@@ -2013,7 +1753,6 @@ func TestResourceChange_primitiveSet(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be created
   + resource "test_instance" "example" {
       + ami       = "ami-STATIC"
@@ -2056,16 +1795,6 @@ func TestResourceChange_primitiveSet(t *testing.T) {
         # (1 unchanged attribute hidden)
     }
 `,
-			VerboseOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-        ami       = "ami-STATIC"
-      ~ id        = "i-02ae66f368e8518a9" -> (known after apply)
-      ~ set_field = [
-          - "aaaa",
-          - "bbbb",
-        ]
-    }
-`,
 		},
 		"in-place update - null to empty set": {
 			Action: plans.Update,
@@ -2088,19 +1817,11 @@ func TestResourceChange_primitiveSet(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id        = "i-02ae66f368e8518a9" -> (known after apply)
       + set_field = []
         # (1 unchanged attribute hidden)
-    }
-`,
-			VerboseOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-        ami       = "ami-STATIC"
-      ~ id        = "i-02ae66f368e8518a9" -> (known after apply)
-      + set_field = []
     }
 `,
 		},
@@ -2128,7 +1849,6 @@ func TestResourceChange_primitiveSet(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id        = "i-02ae66f368e8518a9" -> (known after apply)
@@ -2137,16 +1857,6 @@ func TestResourceChange_primitiveSet(t *testing.T) {
           - "bbbb",
         ] -> (known after apply)
         # (1 unchanged attribute hidden)
-    }
-`,
-			VerboseOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-        ami       = "ami-STATIC"
-      ~ id        = "i-02ae66f368e8518a9" -> (known after apply)
-      ~ set_field = [
-          - "aaaa",
-          - "bbbb",
-        ] -> (known after apply)
     }
 `,
 		},
@@ -2177,7 +1887,6 @@ func TestResourceChange_primitiveSet(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id        = "i-02ae66f368e8518a9" -> (known after apply)
@@ -2187,17 +1896,6 @@ func TestResourceChange_primitiveSet(t *testing.T) {
             # (1 unchanged element hidden)
         ]
         # (1 unchanged attribute hidden)
-    }
-`,
-			VerboseOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-        ami       = "ami-STATIC"
-      ~ id        = "i-02ae66f368e8518a9" -> (known after apply)
-      ~ set_field = [
-            "aaaa",
-          - "bbbb",
-          ~ (known after apply),
-        ]
     }
 `,
 		},
@@ -2230,7 +1928,6 @@ func TestResourceChange_map(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id        = "i-02ae66f368e8518a9" -> (known after apply)
@@ -2238,15 +1935,6 @@ func TestResourceChange_map(t *testing.T) {
           + "new-key" = "new-element"
         }
         # (1 unchanged attribute hidden)
-    }
-`,
-			VerboseOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-        ami       = "ami-STATIC"
-      ~ id        = "i-02ae66f368e8518a9" -> (known after apply)
-      + map_field = {
-          + "new-key" = "new-element"
-        }
     }
 `,
 		},
@@ -2273,7 +1961,6 @@ func TestResourceChange_map(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id        = "i-02ae66f368e8518a9" -> (known after apply)
@@ -2281,15 +1968,6 @@ func TestResourceChange_map(t *testing.T) {
           + "new-key" = "new-element"
         }
         # (1 unchanged attribute hidden)
-    }
-`,
-			VerboseOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-        ami       = "ami-STATIC"
-      ~ id        = "i-02ae66f368e8518a9" -> (known after apply)
-      ~ map_field = {
-          + "new-key" = "new-element"
-        }
     }
 `,
 		},
@@ -2321,7 +1999,6 @@ func TestResourceChange_map(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id        = "i-02ae66f368e8518a9" -> (known after apply)
@@ -2332,21 +2009,11 @@ func TestResourceChange_map(t *testing.T) {
         # (1 unchanged attribute hidden)
     }
 `,
-			VerboseOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-        ami       = "ami-STATIC"
-      ~ id        = "i-02ae66f368e8518a9" -> (known after apply)
-      ~ map_field = {
-            "a" = "aaaa"
-          + "b" = "bbbb"
-            "c" = "cccc"
-        }
-    }
-`,
 		},
 		"force-new update - insertion": {
-			Action: plans.DeleteThenCreate,
-			Mode:   addrs.ManagedResourceMode,
+			Action:       plans.DeleteThenCreate,
+			ActionReason: plans.ResourceInstanceReplaceBecauseCannotUpdate,
+			Mode:         addrs.ManagedResourceMode,
 			Before: cty.ObjectVal(map[string]cty.Value{
 				"id":  cty.StringVal("i-02ae66f368e8518a9"),
 				"ami": cty.StringVal("ami-STATIC"),
@@ -2374,7 +2041,6 @@ func TestResourceChange_map(t *testing.T) {
 			RequiredReplace: cty.NewPathSet(cty.Path{
 				cty.GetAttrStep{Name: "map_field"},
 			}),
-			Tainted: false,
 			ExpectedOutput: `  # test_instance.example must be replaced
 -/+ resource "test_instance" "example" {
       ~ id        = "i-02ae66f368e8518a9" -> (known after apply)
@@ -2383,17 +2049,6 @@ func TestResourceChange_map(t *testing.T) {
             # (2 unchanged elements hidden)
         }
         # (1 unchanged attribute hidden)
-    }
-`,
-			VerboseOutput: `  # test_instance.example must be replaced
--/+ resource "test_instance" "example" {
-        ami       = "ami-STATIC"
-      ~ id        = "i-02ae66f368e8518a9" -> (known after apply)
-      ~ map_field = { # forces replacement
-            "a" = "aaaa"
-          + "b" = "bbbb"
-            "c" = "cccc"
-        }
     }
 `,
 		},
@@ -2424,7 +2079,6 @@ func TestResourceChange_map(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id        = "i-02ae66f368e8518a9" -> (known after apply)
@@ -2434,17 +2088,6 @@ func TestResourceChange_map(t *testing.T) {
             # (1 unchanged element hidden)
         }
         # (1 unchanged attribute hidden)
-    }
-`,
-			VerboseOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-        ami       = "ami-STATIC"
-      ~ id        = "i-02ae66f368e8518a9" -> (known after apply)
-      ~ map_field = {
-          - "a" = "aaaa" -> null
-            "b" = "bbbb"
-          - "c" = "cccc" -> null
-        }
     }
 `,
 		},
@@ -2465,7 +2108,6 @@ func TestResourceChange_map(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be created
   + resource "test_instance" "example" {
       + ami       = "ami-STATIC"
@@ -2503,7 +2145,6 @@ func TestResourceChange_map(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
       ~ id        = "i-02ae66f368e8518a9" -> (known after apply)
@@ -2512,17 +2153,6 @@ func TestResourceChange_map(t *testing.T) {
             # (2 unchanged elements hidden)
         }
         # (1 unchanged attribute hidden)
-    }
-`,
-			VerboseOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-        ami       = "ami-STATIC"
-      ~ id        = "i-02ae66f368e8518a9" -> (known after apply)
-      ~ map_field = {
-            "a" = "aaaa"
-          ~ "b" = "bbbb" -> (known after apply)
-            "c" = "cccc"
-        }
     }
 `,
 		},
@@ -2543,6 +2173,12 @@ func TestResourceChange_nestedList(t *testing.T) {
 						"volume_type": cty.StringVal("gp2"),
 					}),
 				}),
+				"disks": cty.ListVal([]cty.Value{
+					cty.ObjectVal(map[string]cty.Value{
+						"mount_point": cty.StringVal("/var/diska"),
+						"size":        cty.StringVal("50GB"),
+					}),
+				}),
 			}),
 			After: cty.ObjectVal(map[string]cty.Value{
 				"id":  cty.StringVal("i-02ae66f368e8518a9"),
@@ -2552,45 +2188,22 @@ func TestResourceChange_nestedList(t *testing.T) {
 						"volume_type": cty.StringVal("gp2"),
 					}),
 				}),
+				"disks": cty.ListVal([]cty.Value{
+					cty.ObjectVal(map[string]cty.Value{
+						"mount_point": cty.StringVal("/var/diska"),
+						"size":        cty.StringVal("50GB"),
+					}),
+				}),
 			}),
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
-			Schema: &configschema.Block{
-				Attributes: map[string]*configschema.Attribute{
-					"id":  {Type: cty.String, Optional: true, Computed: true},
-					"ami": {Type: cty.String, Optional: true},
-				},
-				BlockTypes: map[string]*configschema.NestedBlock{
-					"root_block_device": {
-						Block: configschema.Block{
-							Attributes: map[string]*configschema.Attribute{
-								"volume_type": {
-									Type:     cty.String,
-									Optional: true,
-									Computed: true,
-								},
-							},
-						},
-						Nesting: configschema.NestingList,
-					},
-				},
-			},
+			Schema:          testSchema(configschema.NestingList),
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
-      ~ ami = "ami-BEFORE" -> "ami-AFTER"
-        id  = "i-02ae66f368e8518a9"
+      ~ ami   = "ami-BEFORE" -> "ami-AFTER"
+        id    = "i-02ae66f368e8518a9"
+        # (1 unchanged attribute hidden)
 
         # (1 unchanged block hidden)
-    }
-`,
-			VerboseOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-      ~ ami = "ami-BEFORE" -> "ami-AFTER"
-        id  = "i-02ae66f368e8518a9"
-
-        root_block_device {
-            volume_type = "gp2"
-        }
     }
 `,
 		},
@@ -2603,10 +2216,18 @@ func TestResourceChange_nestedList(t *testing.T) {
 				"root_block_device": cty.ListValEmpty(cty.Object(map[string]cty.Type{
 					"volume_type": cty.String,
 				})),
+				"disks": cty.ListValEmpty(cty.Object(map[string]cty.Type{
+					"mount_point": cty.String,
+					"size":        cty.String,
+				})),
 			}),
 			After: cty.ObjectVal(map[string]cty.Value{
 				"id":  cty.StringVal("i-02ae66f368e8518a9"),
 				"ami": cty.StringVal("ami-AFTER"),
+				"disks": cty.ListVal([]cty.Value{cty.ObjectVal(map[string]cty.Value{
+					"mount_point": cty.StringVal("/var/diska"),
+					"size":        cty.StringVal("50GB"),
+				})}),
 				"root_block_device": cty.ListVal([]cty.Value{
 					cty.ObjectVal(map[string]cty.Value{
 						"volume_type": cty.NullVal(cty.String),
@@ -2614,31 +2235,17 @@ func TestResourceChange_nestedList(t *testing.T) {
 				}),
 			}),
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
-			Schema: &configschema.Block{
-				Attributes: map[string]*configschema.Attribute{
-					"id":  {Type: cty.String, Optional: true, Computed: true},
-					"ami": {Type: cty.String, Optional: true},
-				},
-				BlockTypes: map[string]*configschema.NestedBlock{
-					"root_block_device": {
-						Block: configschema.Block{
-							Attributes: map[string]*configschema.Attribute{
-								"volume_type": {
-									Type:     cty.String,
-									Optional: true,
-									Computed: true,
-								},
-							},
-						},
-						Nesting: configschema.NestingList,
-					},
-				},
-			},
+			Schema:          testSchema(configschema.NestingList),
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
-      ~ ami = "ami-BEFORE" -> "ami-AFTER"
-        id  = "i-02ae66f368e8518a9"
+      ~ ami   = "ami-BEFORE" -> "ami-AFTER"
+      ~ disks = [
+          ~ {
+            + mount_point = "/var/diska"
+            + size        = "50GB"
+          },
+        ]
+        id    = "i-02ae66f368e8518a9"
 
       + root_block_device {}
     }
@@ -2653,10 +2260,20 @@ func TestResourceChange_nestedList(t *testing.T) {
 				"root_block_device": cty.ListValEmpty(cty.Object(map[string]cty.Type{
 					"volume_type": cty.String,
 				})),
+				"disks": cty.ListValEmpty(cty.Object(map[string]cty.Type{
+					"mount_point": cty.String,
+					"size":        cty.String,
+				})),
 			}),
 			After: cty.ObjectVal(map[string]cty.Value{
 				"id":  cty.StringVal("i-02ae66f368e8518a9"),
 				"ami": cty.StringVal("ami-AFTER"),
+				"disks": cty.ListVal([]cty.Value{
+					cty.ObjectVal(map[string]cty.Value{
+						"mount_point": cty.StringVal("/var/diska"),
+						"size":        cty.NullVal(cty.String),
+					}),
+				}),
 				"root_block_device": cty.ListVal([]cty.Value{
 					cty.ObjectVal(map[string]cty.Value{
 						"volume_type": cty.StringVal("gp2"),
@@ -2664,31 +2281,16 @@ func TestResourceChange_nestedList(t *testing.T) {
 				}),
 			}),
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
-			Schema: &configschema.Block{
-				Attributes: map[string]*configschema.Attribute{
-					"id":  {Type: cty.String, Optional: true, Computed: true},
-					"ami": {Type: cty.String, Optional: true},
-				},
-				BlockTypes: map[string]*configschema.NestedBlock{
-					"root_block_device": {
-						Block: configschema.Block{
-							Attributes: map[string]*configschema.Attribute{
-								"volume_type": {
-									Type:     cty.String,
-									Optional: true,
-									Computed: true,
-								},
-							},
-						},
-						Nesting: configschema.NestingList,
-					},
-				},
-			},
+			Schema:          testSchema(configschema.NestingList),
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
-      ~ ami = "ami-BEFORE" -> "ami-AFTER"
-        id  = "i-02ae66f368e8518a9"
+      ~ ami   = "ami-BEFORE" -> "ami-AFTER"
+      ~ disks = [
+          ~ {
+            + mount_point = "/var/diska"
+          },
+        ]
+        id    = "i-02ae66f368e8518a9"
 
       + root_block_device {
           + volume_type = "gp2"
@@ -2702,6 +2304,16 @@ func TestResourceChange_nestedList(t *testing.T) {
 			Before: cty.ObjectVal(map[string]cty.Value{
 				"id":  cty.StringVal("i-02ae66f368e8518a9"),
 				"ami": cty.StringVal("ami-BEFORE"),
+				"disks": cty.ListVal([]cty.Value{
+					cty.ObjectVal(map[string]cty.Value{
+						"mount_point": cty.StringVal("/var/diska"),
+						"size":        cty.NullVal(cty.String),
+					}),
+					cty.ObjectVal(map[string]cty.Value{
+						"mount_point": cty.StringVal("/var/diskb"),
+						"size":        cty.StringVal("50GB"),
+					}),
+				}),
 				"root_block_device": cty.ListVal([]cty.Value{
 					cty.ObjectVal(map[string]cty.Value{
 						"volume_type": cty.StringVal("gp2"),
@@ -2712,6 +2324,16 @@ func TestResourceChange_nestedList(t *testing.T) {
 			After: cty.ObjectVal(map[string]cty.Value{
 				"id":  cty.StringVal("i-02ae66f368e8518a9"),
 				"ami": cty.StringVal("ami-AFTER"),
+				"disks": cty.ListVal([]cty.Value{
+					cty.ObjectVal(map[string]cty.Value{
+						"mount_point": cty.StringVal("/var/diska"),
+						"size":        cty.StringVal("50GB"),
+					}),
+					cty.ObjectVal(map[string]cty.Value{
+						"mount_point": cty.StringVal("/var/diskb"),
+						"size":        cty.StringVal("50GB"),
+					}),
+				}),
 				"root_block_device": cty.ListVal([]cty.Value{
 					cty.ObjectVal(map[string]cty.Value{
 						"volume_type": cty.StringVal("gp2"),
@@ -2720,36 +2342,18 @@ func TestResourceChange_nestedList(t *testing.T) {
 				}),
 			}),
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
-			Schema: &configschema.Block{
-				Attributes: map[string]*configschema.Attribute{
-					"id":  {Type: cty.String, Optional: true, Computed: true},
-					"ami": {Type: cty.String, Optional: true},
-				},
-				BlockTypes: map[string]*configschema.NestedBlock{
-					"root_block_device": {
-						Block: configschema.Block{
-							Attributes: map[string]*configschema.Attribute{
-								"volume_type": {
-									Type:     cty.String,
-									Optional: true,
-									Computed: true,
-								},
-								"new_field": {
-									Type:     cty.String,
-									Optional: true,
-									Computed: true,
-								},
-							},
-						},
-						Nesting: configschema.NestingList,
-					},
-				},
-			},
+			Schema:          testSchemaPlus(configschema.NestingList),
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
-      ~ ami = "ami-BEFORE" -> "ami-AFTER"
-        id  = "i-02ae66f368e8518a9"
+      ~ ami   = "ami-BEFORE" -> "ami-AFTER"
+      ~ disks = [
+          ~ {
+            + size        = "50GB"
+              # (1 unchanged attribute hidden)
+          },
+          # (1 unchanged element hidden)
+        ]
+        id    = "i-02ae66f368e8518a9"
 
       ~ root_block_device {
           + new_field   = "new_value"
@@ -2757,24 +2361,20 @@ func TestResourceChange_nestedList(t *testing.T) {
         }
     }
 `,
-			VerboseOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-      ~ ami = "ami-BEFORE" -> "ami-AFTER"
-        id  = "i-02ae66f368e8518a9"
-
-      ~ root_block_device {
-          + new_field   = "new_value"
-            volume_type = "gp2"
-        }
-    }
-`,
 		},
-		"force-new update (inside block)": {
-			Action: plans.DeleteThenCreate,
-			Mode:   addrs.ManagedResourceMode,
+		"force-new update (inside blocks)": {
+			Action:       plans.DeleteThenCreate,
+			ActionReason: plans.ResourceInstanceReplaceBecauseCannotUpdate,
+			Mode:         addrs.ManagedResourceMode,
 			Before: cty.ObjectVal(map[string]cty.Value{
 				"id":  cty.StringVal("i-02ae66f368e8518a9"),
 				"ami": cty.StringVal("ami-BEFORE"),
+				"disks": cty.ListVal([]cty.Value{
+					cty.ObjectVal(map[string]cty.Value{
+						"mount_point": cty.StringVal("/var/diska"),
+						"size":        cty.StringVal("50GB"),
+					}),
+				}),
 				"root_block_device": cty.ListVal([]cty.Value{
 					cty.ObjectVal(map[string]cty.Value{
 						"volume_type": cty.StringVal("gp2"),
@@ -2784,42 +2384,41 @@ func TestResourceChange_nestedList(t *testing.T) {
 			After: cty.ObjectVal(map[string]cty.Value{
 				"id":  cty.StringVal("i-02ae66f368e8518a9"),
 				"ami": cty.StringVal("ami-AFTER"),
+				"disks": cty.ListVal([]cty.Value{
+					cty.ObjectVal(map[string]cty.Value{
+						"mount_point": cty.StringVal("/var/diskb"),
+						"size":        cty.StringVal("50GB"),
+					}),
+				}),
 				"root_block_device": cty.ListVal([]cty.Value{
 					cty.ObjectVal(map[string]cty.Value{
 						"volume_type": cty.StringVal("different"),
 					}),
 				}),
 			}),
-			RequiredReplace: cty.NewPathSet(cty.Path{
-				cty.GetAttrStep{Name: "root_block_device"},
-				cty.IndexStep{Key: cty.NumberIntVal(0)},
-				cty.GetAttrStep{Name: "volume_type"},
-			}),
-			Tainted: false,
-			Schema: &configschema.Block{
-				Attributes: map[string]*configschema.Attribute{
-					"id":  {Type: cty.String, Optional: true, Computed: true},
-					"ami": {Type: cty.String, Optional: true},
+			RequiredReplace: cty.NewPathSet(
+				cty.Path{
+					cty.GetAttrStep{Name: "root_block_device"},
+					cty.IndexStep{Key: cty.NumberIntVal(0)},
+					cty.GetAttrStep{Name: "volume_type"},
 				},
-				BlockTypes: map[string]*configschema.NestedBlock{
-					"root_block_device": {
-						Block: configschema.Block{
-							Attributes: map[string]*configschema.Attribute{
-								"volume_type": {
-									Type:     cty.String,
-									Optional: true,
-									Computed: true,
-								},
-							},
-						},
-						Nesting: configschema.NestingList,
-					},
+				cty.Path{
+					cty.GetAttrStep{Name: "disks"},
+					cty.IndexStep{Key: cty.NumberIntVal(0)},
+					cty.GetAttrStep{Name: "mount_point"},
 				},
-			},
+			),
+			Schema: testSchema(configschema.NestingList),
 			ExpectedOutput: `  # test_instance.example must be replaced
 -/+ resource "test_instance" "example" {
-      ~ ami = "ami-BEFORE" -> "ami-AFTER"
-        id  = "i-02ae66f368e8518a9"
+      ~ ami   = "ami-BEFORE" -> "ami-AFTER"
+      ~ disks = [
+          ~ {
+            ~ mount_point = "/var/diska" -> "/var/diskb" # forces replacement
+              # (1 unchanged attribute hidden)
+          },
+        ]
+        id    = "i-02ae66f368e8518a9"
 
       ~ root_block_device {
           ~ volume_type = "gp2" -> "different" # forces replacement
@@ -2828,11 +2427,18 @@ func TestResourceChange_nestedList(t *testing.T) {
 `,
 		},
 		"force-new update (whole block)": {
-			Action: plans.DeleteThenCreate,
-			Mode:   addrs.ManagedResourceMode,
+			Action:       plans.DeleteThenCreate,
+			ActionReason: plans.ResourceInstanceReplaceBecauseCannotUpdate,
+			Mode:         addrs.ManagedResourceMode,
 			Before: cty.ObjectVal(map[string]cty.Value{
 				"id":  cty.StringVal("i-02ae66f368e8518a9"),
 				"ami": cty.StringVal("ami-BEFORE"),
+				"disks": cty.ListVal([]cty.Value{
+					cty.ObjectVal(map[string]cty.Value{
+						"mount_point": cty.StringVal("/var/diska"),
+						"size":        cty.StringVal("50GB"),
+					}),
+				}),
 				"root_block_device": cty.ListVal([]cty.Value{
 					cty.ObjectVal(map[string]cty.Value{
 						"volume_type": cty.StringVal("gp2"),
@@ -2842,40 +2448,33 @@ func TestResourceChange_nestedList(t *testing.T) {
 			After: cty.ObjectVal(map[string]cty.Value{
 				"id":  cty.StringVal("i-02ae66f368e8518a9"),
 				"ami": cty.StringVal("ami-AFTER"),
+				"disks": cty.ListVal([]cty.Value{
+					cty.ObjectVal(map[string]cty.Value{
+						"mount_point": cty.StringVal("/var/diskb"),
+						"size":        cty.StringVal("50GB"),
+					}),
+				}),
 				"root_block_device": cty.ListVal([]cty.Value{
 					cty.ObjectVal(map[string]cty.Value{
 						"volume_type": cty.StringVal("different"),
 					}),
 				}),
 			}),
-			RequiredReplace: cty.NewPathSet(cty.Path{
-				cty.GetAttrStep{Name: "root_block_device"},
-			}),
-			Tainted: false,
-			Schema: &configschema.Block{
-				Attributes: map[string]*configschema.Attribute{
-					"id":  {Type: cty.String, Optional: true, Computed: true},
-					"ami": {Type: cty.String, Optional: true},
-				},
-				BlockTypes: map[string]*configschema.NestedBlock{
-					"root_block_device": {
-						Block: configschema.Block{
-							Attributes: map[string]*configschema.Attribute{
-								"volume_type": {
-									Type:     cty.String,
-									Optional: true,
-									Computed: true,
-								},
-							},
-						},
-						Nesting: configschema.NestingList,
-					},
-				},
-			},
+			RequiredReplace: cty.NewPathSet(
+				cty.Path{cty.GetAttrStep{Name: "root_block_device"}},
+				cty.Path{cty.GetAttrStep{Name: "disks"}},
+			),
+			Schema: testSchema(configschema.NestingList),
 			ExpectedOutput: `  # test_instance.example must be replaced
 -/+ resource "test_instance" "example" {
-      ~ ami = "ami-BEFORE" -> "ami-AFTER"
-        id  = "i-02ae66f368e8518a9"
+      ~ ami   = "ami-BEFORE" -> "ami-AFTER"
+      ~ disks = [ # forces replacement
+          ~ {
+            ~ mount_point = "/var/diska" -> "/var/diskb"
+              # (1 unchanged attribute hidden)
+          },
+        ]
+        id    = "i-02ae66f368e8518a9"
 
       ~ root_block_device { # forces replacement
           ~ volume_type = "gp2" -> "different"
@@ -2889,55 +2488,43 @@ func TestResourceChange_nestedList(t *testing.T) {
 			Before: cty.ObjectVal(map[string]cty.Value{
 				"id":  cty.StringVal("i-02ae66f368e8518a9"),
 				"ami": cty.StringVal("ami-BEFORE"),
+				"disks": cty.ListVal([]cty.Value{
+					cty.ObjectVal(map[string]cty.Value{
+						"mount_point": cty.StringVal("/var/diska"),
+						"size":        cty.StringVal("50GB"),
+					}),
+				}),
 				"root_block_device": cty.ListVal([]cty.Value{
 					cty.ObjectVal(map[string]cty.Value{
 						"volume_type": cty.StringVal("gp2"),
-						"new_field":   cty.StringVal("new_value"),
 					}),
 				}),
 			}),
 			After: cty.ObjectVal(map[string]cty.Value{
 				"id":  cty.StringVal("i-02ae66f368e8518a9"),
 				"ami": cty.StringVal("ami-AFTER"),
+				"disks": cty.ListValEmpty(cty.Object(map[string]cty.Type{
+					"mount_point": cty.String,
+					"size":        cty.String,
+				})),
 				"root_block_device": cty.ListValEmpty(cty.Object(map[string]cty.Type{
 					"volume_type": cty.String,
-					"new_field":   cty.String,
 				})),
 			}),
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
-			Schema: &configschema.Block{
-				Attributes: map[string]*configschema.Attribute{
-					"id":  {Type: cty.String, Optional: true, Computed: true},
-					"ami": {Type: cty.String, Optional: true},
-				},
-				BlockTypes: map[string]*configschema.NestedBlock{
-					"root_block_device": {
-						Block: configschema.Block{
-							Attributes: map[string]*configschema.Attribute{
-								"volume_type": {
-									Type:     cty.String,
-									Optional: true,
-									Computed: true,
-								},
-								"new_field": {
-									Type:     cty.String,
-									Optional: true,
-									Computed: true,
-								},
-							},
-						},
-						Nesting: configschema.NestingList,
-					},
-				},
-			},
+			Schema:          testSchema(configschema.NestingList),
 			ExpectedOutput: `  # test_instance.example will be updated in-place
   ~ resource "test_instance" "example" {
-      ~ ami = "ami-BEFORE" -> "ami-AFTER"
-        id  = "i-02ae66f368e8518a9"
+      ~ ami   = "ami-BEFORE" -> "ami-AFTER"
+      ~ disks = [
+          ~ {
+            - mount_point = "/var/diska" -> null
+            - size        = "50GB" -> null
+          },
+        ]
+        id    = "i-02ae66f368e8518a9"
 
       - root_block_device {
-          - new_field   = "new_value" -> null
           - volume_type = "gp2" -> null
         }
     }
@@ -2960,7 +2547,6 @@ func TestResourceChange_nestedList(t *testing.T) {
 				}),
 			}),
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			Schema: &configschema.Block{
 				BlockTypes: map[string]*configschema.NestedBlock{
 					"block": {
@@ -2984,597 +2570,6 @@ func TestResourceChange_nestedList(t *testing.T) {
     }
 `,
 		},
-	}
-	runTestCases(t, testCases)
-}
-
-func TestResourceChange_nestedSet(t *testing.T) {
-	testCases := map[string]testCase{
-		"in-place update - creation": {
-			Action: plans.Update,
-			Mode:   addrs.ManagedResourceMode,
-			Before: cty.ObjectVal(map[string]cty.Value{
-				"id":  cty.StringVal("i-02ae66f368e8518a9"),
-				"ami": cty.StringVal("ami-BEFORE"),
-				"root_block_device": cty.SetValEmpty(cty.Object(map[string]cty.Type{
-					"volume_type": cty.String,
-				})),
-			}),
-			After: cty.ObjectVal(map[string]cty.Value{
-				"id":  cty.StringVal("i-02ae66f368e8518a9"),
-				"ami": cty.StringVal("ami-AFTER"),
-				"root_block_device": cty.SetVal([]cty.Value{
-					cty.ObjectVal(map[string]cty.Value{
-						"volume_type": cty.StringVal("gp2"),
-					}),
-				}),
-			}),
-			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
-			Schema: &configschema.Block{
-				Attributes: map[string]*configschema.Attribute{
-					"id":  {Type: cty.String, Optional: true, Computed: true},
-					"ami": {Type: cty.String, Optional: true},
-				},
-				BlockTypes: map[string]*configschema.NestedBlock{
-					"root_block_device": {
-						Block: configschema.Block{
-							Attributes: map[string]*configschema.Attribute{
-								"volume_type": {
-									Type:     cty.String,
-									Optional: true,
-									Computed: true,
-								},
-							},
-						},
-						Nesting: configschema.NestingSet,
-					},
-				},
-			},
-			ExpectedOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-      ~ ami = "ami-BEFORE" -> "ami-AFTER"
-        id  = "i-02ae66f368e8518a9"
-
-      + root_block_device {
-          + volume_type = "gp2"
-        }
-    }
-`,
-		},
-		"in-place update - insertion": {
-			Action: plans.Update,
-			Mode:   addrs.ManagedResourceMode,
-			Before: cty.ObjectVal(map[string]cty.Value{
-				"id":  cty.StringVal("i-02ae66f368e8518a9"),
-				"ami": cty.StringVal("ami-BEFORE"),
-				"root_block_device": cty.SetVal([]cty.Value{
-					cty.ObjectVal(map[string]cty.Value{
-						"volume_type": cty.StringVal("gp2"),
-						"new_field":   cty.NullVal(cty.String),
-					}),
-				}),
-			}),
-			After: cty.ObjectVal(map[string]cty.Value{
-				"id":  cty.StringVal("i-02ae66f368e8518a9"),
-				"ami": cty.StringVal("ami-AFTER"),
-				"root_block_device": cty.SetVal([]cty.Value{
-					cty.ObjectVal(map[string]cty.Value{
-						"volume_type": cty.StringVal("gp2"),
-						"new_field":   cty.StringVal("new_value"),
-					}),
-				}),
-			}),
-			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
-			Schema: &configschema.Block{
-				Attributes: map[string]*configschema.Attribute{
-					"id":  {Type: cty.String, Optional: true, Computed: true},
-					"ami": {Type: cty.String, Optional: true},
-				},
-				BlockTypes: map[string]*configschema.NestedBlock{
-					"root_block_device": {
-						Block: configschema.Block{
-							Attributes: map[string]*configschema.Attribute{
-								"volume_type": {
-									Type:     cty.String,
-									Optional: true,
-									Computed: true,
-								},
-								"new_field": {
-									Type:     cty.String,
-									Optional: true,
-									Computed: true,
-								},
-							},
-						},
-						Nesting: configschema.NestingSet,
-					},
-				},
-			},
-			ExpectedOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-      ~ ami = "ami-BEFORE" -> "ami-AFTER"
-        id  = "i-02ae66f368e8518a9"
-
-      + root_block_device {
-          + new_field   = "new_value"
-          + volume_type = "gp2"
-        }
-      - root_block_device {
-          - volume_type = "gp2" -> null
-        }
-    }
-`,
-		},
-		"force-new update (whole block)": {
-			Action: plans.DeleteThenCreate,
-			Mode:   addrs.ManagedResourceMode,
-			Before: cty.ObjectVal(map[string]cty.Value{
-				"id":  cty.StringVal("i-02ae66f368e8518a9"),
-				"ami": cty.StringVal("ami-BEFORE"),
-				"root_block_device": cty.SetVal([]cty.Value{
-					cty.ObjectVal(map[string]cty.Value{
-						"volume_type": cty.StringVal("gp2"),
-					}),
-				}),
-			}),
-			After: cty.ObjectVal(map[string]cty.Value{
-				"id":  cty.StringVal("i-02ae66f368e8518a9"),
-				"ami": cty.StringVal("ami-AFTER"),
-				"root_block_device": cty.SetVal([]cty.Value{
-					cty.ObjectVal(map[string]cty.Value{
-						"volume_type": cty.StringVal("different"),
-					}),
-				}),
-			}),
-			RequiredReplace: cty.NewPathSet(cty.Path{
-				cty.GetAttrStep{Name: "root_block_device"},
-			}),
-			Tainted: false,
-			Schema: &configschema.Block{
-				Attributes: map[string]*configschema.Attribute{
-					"id":  {Type: cty.String, Optional: true, Computed: true},
-					"ami": {Type: cty.String, Optional: true},
-				},
-				BlockTypes: map[string]*configschema.NestedBlock{
-					"root_block_device": {
-						Block: configschema.Block{
-							Attributes: map[string]*configschema.Attribute{
-								"volume_type": {
-									Type:     cty.String,
-									Optional: true,
-									Computed: true,
-								},
-							},
-						},
-						Nesting: configschema.NestingSet,
-					},
-				},
-			},
-			ExpectedOutput: `  # test_instance.example must be replaced
--/+ resource "test_instance" "example" {
-      ~ ami = "ami-BEFORE" -> "ami-AFTER"
-        id  = "i-02ae66f368e8518a9"
-
-      + root_block_device { # forces replacement
-          + volume_type = "different"
-        }
-      - root_block_device { # forces replacement
-          - volume_type = "gp2" -> null
-        }
-    }
-`,
-		},
-		"in-place update - deletion": {
-			Action: plans.Update,
-			Mode:   addrs.ManagedResourceMode,
-			Before: cty.ObjectVal(map[string]cty.Value{
-				"id":  cty.StringVal("i-02ae66f368e8518a9"),
-				"ami": cty.StringVal("ami-BEFORE"),
-				"root_block_device": cty.SetVal([]cty.Value{
-					cty.ObjectVal(map[string]cty.Value{
-						"volume_type": cty.StringVal("gp2"),
-						"new_field":   cty.StringVal("new_value"),
-					}),
-				}),
-			}),
-			After: cty.ObjectVal(map[string]cty.Value{
-				"id":  cty.StringVal("i-02ae66f368e8518a9"),
-				"ami": cty.StringVal("ami-AFTER"),
-				"root_block_device": cty.SetValEmpty(cty.Object(map[string]cty.Type{
-					"volume_type": cty.String,
-					"new_field":   cty.String,
-				})),
-			}),
-			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
-			Schema: &configschema.Block{
-				Attributes: map[string]*configschema.Attribute{
-					"id":  {Type: cty.String, Optional: true, Computed: true},
-					"ami": {Type: cty.String, Optional: true},
-				},
-				BlockTypes: map[string]*configschema.NestedBlock{
-					"root_block_device": {
-						Block: configschema.Block{
-							Attributes: map[string]*configschema.Attribute{
-								"volume_type": {
-									Type:     cty.String,
-									Optional: true,
-									Computed: true,
-								},
-								"new_field": {
-									Type:     cty.String,
-									Optional: true,
-									Computed: true,
-								},
-							},
-						},
-						Nesting: configschema.NestingSet,
-					},
-				},
-			},
-			ExpectedOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-      ~ ami = "ami-BEFORE" -> "ami-AFTER"
-        id  = "i-02ae66f368e8518a9"
-
-      - root_block_device {
-          - new_field   = "new_value" -> null
-          - volume_type = "gp2" -> null
-        }
-    }
-`,
-		},
-	}
-	runTestCases(t, testCases)
-}
-
-func TestResourceChange_nestedMap(t *testing.T) {
-	testCases := map[string]testCase{
-		"in-place update - creation": {
-			Action: plans.Update,
-			Mode:   addrs.ManagedResourceMode,
-			Before: cty.ObjectVal(map[string]cty.Value{
-				"id":  cty.StringVal("i-02ae66f368e8518a9"),
-				"ami": cty.StringVal("ami-BEFORE"),
-				"root_block_device": cty.MapValEmpty(cty.Object(map[string]cty.Type{
-					"volume_type": cty.String,
-				})),
-			}),
-			After: cty.ObjectVal(map[string]cty.Value{
-				"id":  cty.StringVal("i-02ae66f368e8518a9"),
-				"ami": cty.StringVal("ami-AFTER"),
-				"root_block_device": cty.MapVal(map[string]cty.Value{
-					"a": cty.ObjectVal(map[string]cty.Value{
-						"volume_type": cty.StringVal("gp2"),
-					}),
-				}),
-			}),
-			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
-			Schema: &configschema.Block{
-				Attributes: map[string]*configschema.Attribute{
-					"id":  {Type: cty.String, Optional: true, Computed: true},
-					"ami": {Type: cty.String, Optional: true},
-				},
-				BlockTypes: map[string]*configschema.NestedBlock{
-					"root_block_device": {
-						Block: configschema.Block{
-							Attributes: map[string]*configschema.Attribute{
-								"volume_type": {
-									Type:     cty.String,
-									Optional: true,
-									Computed: true,
-								},
-							},
-						},
-						Nesting: configschema.NestingMap,
-					},
-				},
-			},
-			ExpectedOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-      ~ ami = "ami-BEFORE" -> "ami-AFTER"
-        id  = "i-02ae66f368e8518a9"
-
-      + root_block_device "a" {
-          + volume_type = "gp2"
-        }
-    }
-`,
-		},
-		"in-place update - change attr": {
-			Action: plans.Update,
-			Mode:   addrs.ManagedResourceMode,
-			Before: cty.ObjectVal(map[string]cty.Value{
-				"id":  cty.StringVal("i-02ae66f368e8518a9"),
-				"ami": cty.StringVal("ami-BEFORE"),
-				"root_block_device": cty.MapVal(map[string]cty.Value{
-					"a": cty.ObjectVal(map[string]cty.Value{
-						"volume_type": cty.StringVal("gp2"),
-						"new_field":   cty.NullVal(cty.String),
-					}),
-				}),
-			}),
-			After: cty.ObjectVal(map[string]cty.Value{
-				"id":  cty.StringVal("i-02ae66f368e8518a9"),
-				"ami": cty.StringVal("ami-AFTER"),
-				"root_block_device": cty.MapVal(map[string]cty.Value{
-					"a": cty.ObjectVal(map[string]cty.Value{
-						"volume_type": cty.StringVal("gp2"),
-						"new_field":   cty.StringVal("new_value"),
-					}),
-				}),
-			}),
-			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
-			Schema: &configschema.Block{
-				Attributes: map[string]*configschema.Attribute{
-					"id":  {Type: cty.String, Optional: true, Computed: true},
-					"ami": {Type: cty.String, Optional: true},
-				},
-				BlockTypes: map[string]*configschema.NestedBlock{
-					"root_block_device": {
-						Block: configschema.Block{
-							Attributes: map[string]*configschema.Attribute{
-								"volume_type": {
-									Type:     cty.String,
-									Optional: true,
-									Computed: true,
-								},
-								"new_field": {
-									Type:     cty.String,
-									Optional: true,
-									Computed: true,
-								},
-							},
-						},
-						Nesting: configschema.NestingMap,
-					},
-				},
-			},
-			ExpectedOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-      ~ ami = "ami-BEFORE" -> "ami-AFTER"
-        id  = "i-02ae66f368e8518a9"
-
-      ~ root_block_device "a" {
-          + new_field   = "new_value"
-            # (1 unchanged attribute hidden)
-        }
-    }
-`,
-			VerboseOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-      ~ ami = "ami-BEFORE" -> "ami-AFTER"
-        id  = "i-02ae66f368e8518a9"
-
-      ~ root_block_device "a" {
-          + new_field   = "new_value"
-            volume_type = "gp2"
-        }
-    }
-`,
-		},
-		"in-place update - insertion": {
-			Action: plans.Update,
-			Mode:   addrs.ManagedResourceMode,
-			Before: cty.ObjectVal(map[string]cty.Value{
-				"id":  cty.StringVal("i-02ae66f368e8518a9"),
-				"ami": cty.StringVal("ami-BEFORE"),
-				"root_block_device": cty.MapVal(map[string]cty.Value{
-					"a": cty.ObjectVal(map[string]cty.Value{
-						"volume_type": cty.StringVal("gp2"),
-						"new_field":   cty.NullVal(cty.String),
-					}),
-				}),
-			}),
-			After: cty.ObjectVal(map[string]cty.Value{
-				"id":  cty.StringVal("i-02ae66f368e8518a9"),
-				"ami": cty.StringVal("ami-AFTER"),
-				"root_block_device": cty.MapVal(map[string]cty.Value{
-					"a": cty.ObjectVal(map[string]cty.Value{
-						"volume_type": cty.StringVal("gp2"),
-						"new_field":   cty.NullVal(cty.String),
-					}),
-					"b": cty.ObjectVal(map[string]cty.Value{
-						"volume_type": cty.StringVal("gp2"),
-						"new_field":   cty.StringVal("new_value"),
-					}),
-				}),
-			}),
-			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
-			Schema: &configschema.Block{
-				Attributes: map[string]*configschema.Attribute{
-					"id":  {Type: cty.String, Optional: true, Computed: true},
-					"ami": {Type: cty.String, Optional: true},
-				},
-				BlockTypes: map[string]*configschema.NestedBlock{
-					"root_block_device": {
-						Block: configschema.Block{
-							Attributes: map[string]*configschema.Attribute{
-								"volume_type": {
-									Type:     cty.String,
-									Optional: true,
-									Computed: true,
-								},
-								"new_field": {
-									Type:     cty.String,
-									Optional: true,
-									Computed: true,
-								},
-							},
-						},
-						Nesting: configschema.NestingMap,
-					},
-				},
-			},
-			ExpectedOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-      ~ ami = "ami-BEFORE" -> "ami-AFTER"
-        id  = "i-02ae66f368e8518a9"
-
-      + root_block_device "b" {
-          + new_field   = "new_value"
-          + volume_type = "gp2"
-        }
-        # (1 unchanged block hidden)
-    }
-`,
-			VerboseOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-      ~ ami = "ami-BEFORE" -> "ami-AFTER"
-        id  = "i-02ae66f368e8518a9"
-
-        root_block_device "a" {
-            volume_type = "gp2"
-        }
-      + root_block_device "b" {
-          + new_field   = "new_value"
-          + volume_type = "gp2"
-        }
-    }
-`,
-		},
-		"force-new update (whole block)": {
-			Action: plans.DeleteThenCreate,
-			Mode:   addrs.ManagedResourceMode,
-			Before: cty.ObjectVal(map[string]cty.Value{
-				"id":  cty.StringVal("i-02ae66f368e8518a9"),
-				"ami": cty.StringVal("ami-BEFORE"),
-				"root_block_device": cty.MapVal(map[string]cty.Value{
-					"a": cty.ObjectVal(map[string]cty.Value{
-						"volume_type": cty.StringVal("gp2"),
-					}),
-					"b": cty.ObjectVal(map[string]cty.Value{
-						"volume_type": cty.StringVal("standard"),
-					}),
-				}),
-			}),
-			After: cty.ObjectVal(map[string]cty.Value{
-				"id":  cty.StringVal("i-02ae66f368e8518a9"),
-				"ami": cty.StringVal("ami-AFTER"),
-				"root_block_device": cty.MapVal(map[string]cty.Value{
-					"a": cty.ObjectVal(map[string]cty.Value{
-						"volume_type": cty.StringVal("different"),
-					}),
-					"b": cty.ObjectVal(map[string]cty.Value{
-						"volume_type": cty.StringVal("standard"),
-					}),
-				}),
-			}),
-			RequiredReplace: cty.NewPathSet(cty.Path{
-				cty.GetAttrStep{Name: "root_block_device"},
-				cty.IndexStep{Key: cty.StringVal("a")},
-			}),
-			Tainted: false,
-			Schema: &configschema.Block{
-				Attributes: map[string]*configschema.Attribute{
-					"id":  {Type: cty.String, Optional: true, Computed: true},
-					"ami": {Type: cty.String, Optional: true},
-				},
-				BlockTypes: map[string]*configschema.NestedBlock{
-					"root_block_device": {
-						Block: configschema.Block{
-							Attributes: map[string]*configschema.Attribute{
-								"volume_type": {
-									Type:     cty.String,
-									Optional: true,
-									Computed: true,
-								},
-							},
-						},
-						Nesting: configschema.NestingMap,
-					},
-				},
-			},
-			ExpectedOutput: `  # test_instance.example must be replaced
--/+ resource "test_instance" "example" {
-      ~ ami = "ami-BEFORE" -> "ami-AFTER"
-        id  = "i-02ae66f368e8518a9"
-
-      ~ root_block_device "a" { # forces replacement
-          ~ volume_type = "gp2" -> "different"
-        }
-        # (1 unchanged block hidden)
-    }
-`,
-			VerboseOutput: `  # test_instance.example must be replaced
--/+ resource "test_instance" "example" {
-      ~ ami = "ami-BEFORE" -> "ami-AFTER"
-        id  = "i-02ae66f368e8518a9"
-
-      ~ root_block_device "a" { # forces replacement
-          ~ volume_type = "gp2" -> "different"
-        }
-        root_block_device "b" {
-            volume_type = "standard"
-        }
-    }
-`,
-		},
-		"in-place update - deletion": {
-			Action: plans.Update,
-			Mode:   addrs.ManagedResourceMode,
-			Before: cty.ObjectVal(map[string]cty.Value{
-				"id":  cty.StringVal("i-02ae66f368e8518a9"),
-				"ami": cty.StringVal("ami-BEFORE"),
-				"root_block_device": cty.MapVal(map[string]cty.Value{
-					"a": cty.ObjectVal(map[string]cty.Value{
-						"volume_type": cty.StringVal("gp2"),
-						"new_field":   cty.StringVal("new_value"),
-					}),
-				}),
-			}),
-			After: cty.ObjectVal(map[string]cty.Value{
-				"id":  cty.StringVal("i-02ae66f368e8518a9"),
-				"ami": cty.StringVal("ami-AFTER"),
-				"root_block_device": cty.MapValEmpty(cty.Object(map[string]cty.Type{
-					"volume_type": cty.String,
-					"new_field":   cty.String,
-				})),
-			}),
-			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
-			Schema: &configschema.Block{
-				Attributes: map[string]*configschema.Attribute{
-					"id":  {Type: cty.String, Optional: true, Computed: true},
-					"ami": {Type: cty.String, Optional: true},
-				},
-				BlockTypes: map[string]*configschema.NestedBlock{
-					"root_block_device": {
-						Block: configschema.Block{
-							Attributes: map[string]*configschema.Attribute{
-								"volume_type": {
-									Type:     cty.String,
-									Optional: true,
-									Computed: true,
-								},
-								"new_field": {
-									Type:     cty.String,
-									Optional: true,
-									Computed: true,
-								},
-							},
-						},
-						Nesting: configschema.NestingMap,
-					},
-				},
-			},
-			ExpectedOutput: `  # test_instance.example will be updated in-place
-  ~ resource "test_instance" "example" {
-      ~ ami = "ami-BEFORE" -> "ami-AFTER"
-        id  = "i-02ae66f368e8518a9"
-
-      - root_block_device "a" {
-          - new_field   = "new_value" -> null
-          - volume_type = "gp2" -> null
-        }
-    }
-`,
-		},
 		"in-place sequence update - deletion": {
 			Action: plans.Update,
 			Mode:   addrs.ManagedResourceMode,
@@ -3591,7 +2586,6 @@ func TestResourceChange_nestedMap(t *testing.T) {
 				}),
 			}),
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			Schema: &configschema.Block{
 				BlockTypes: map[string]*configschema.NestedBlock{
 					"list": {
@@ -3614,6 +2608,523 @@ func TestResourceChange_nestedMap(t *testing.T) {
         }
       ~ list {
           ~ attr = "y" -> "z"
+        }
+    }
+`,
+		},
+	}
+	runTestCases(t, testCases)
+}
+
+func TestResourceChange_nestedSet(t *testing.T) {
+	testCases := map[string]testCase{
+		"in-place update - creation": {
+			Action: plans.Update,
+			Mode:   addrs.ManagedResourceMode,
+			Before: cty.ObjectVal(map[string]cty.Value{
+				"id":  cty.StringVal("i-02ae66f368e8518a9"),
+				"ami": cty.StringVal("ami-BEFORE"),
+				"disks": cty.SetValEmpty(cty.Object(map[string]cty.Type{
+					"mount_point": cty.String,
+					"size":        cty.String,
+				})),
+				"root_block_device": cty.SetValEmpty(cty.Object(map[string]cty.Type{
+					"volume_type": cty.String,
+				})),
+			}),
+			After: cty.ObjectVal(map[string]cty.Value{
+				"id":  cty.StringVal("i-02ae66f368e8518a9"),
+				"ami": cty.StringVal("ami-AFTER"),
+				"disks": cty.SetVal([]cty.Value{
+					cty.ObjectVal(map[string]cty.Value{
+						"mount_point": cty.StringVal("/var/diska"),
+						"size":        cty.NullVal(cty.String),
+					}),
+				}),
+				"root_block_device": cty.SetVal([]cty.Value{
+					cty.ObjectVal(map[string]cty.Value{
+						"volume_type": cty.StringVal("gp2"),
+					}),
+				}),
+			}),
+			RequiredReplace: cty.NewPathSet(),
+			Schema:          testSchema(configschema.NestingSet),
+			ExpectedOutput: `  # test_instance.example will be updated in-place
+  ~ resource "test_instance" "example" {
+      ~ ami   = "ami-BEFORE" -> "ami-AFTER"
+      ~ disks = [
+          + {
+            + mount_point = "/var/diska"
+          },
+        ]
+        id    = "i-02ae66f368e8518a9"
+
+      + root_block_device {
+          + volume_type = "gp2"
+        }
+    }
+`,
+		},
+		"in-place update - insertion": {
+			Action: plans.Update,
+			Mode:   addrs.ManagedResourceMode,
+			Before: cty.ObjectVal(map[string]cty.Value{
+				"id":  cty.StringVal("i-02ae66f368e8518a9"),
+				"ami": cty.StringVal("ami-BEFORE"),
+				"disks": cty.SetVal([]cty.Value{
+					cty.ObjectVal(map[string]cty.Value{
+						"mount_point": cty.StringVal("/var/diska"),
+						"size":        cty.NullVal(cty.String),
+					}),
+				}),
+				"root_block_device": cty.SetVal([]cty.Value{
+					cty.ObjectVal(map[string]cty.Value{
+						"volume_type": cty.StringVal("gp2"),
+						"new_field":   cty.NullVal(cty.String),
+					}),
+				}),
+			}),
+			After: cty.ObjectVal(map[string]cty.Value{
+				"id":  cty.StringVal("i-02ae66f368e8518a9"),
+				"ami": cty.StringVal("ami-AFTER"),
+				"disks": cty.SetVal([]cty.Value{
+					cty.ObjectVal(map[string]cty.Value{
+						"mount_point": cty.StringVal("/var/diska"),
+						"size":        cty.StringVal("50GB"),
+					}),
+				}),
+				"root_block_device": cty.SetVal([]cty.Value{
+					cty.ObjectVal(map[string]cty.Value{
+						"volume_type": cty.StringVal("gp2"),
+						"new_field":   cty.StringVal("new_value"),
+					}),
+				}),
+			}),
+			RequiredReplace: cty.NewPathSet(),
+			Schema:          testSchemaPlus(configschema.NestingSet),
+			ExpectedOutput: `  # test_instance.example will be updated in-place
+  ~ resource "test_instance" "example" {
+      ~ ami   = "ami-BEFORE" -> "ami-AFTER"
+      ~ disks = [
+          + {
+            + mount_point = "/var/diska"
+            + size        = "50GB"
+          },
+          - {
+            - mount_point = "/var/diska" -> null
+          },
+        ]
+        id    = "i-02ae66f368e8518a9"
+
+      + root_block_device {
+          + new_field   = "new_value"
+          + volume_type = "gp2"
+        }
+      - root_block_device {
+          - volume_type = "gp2" -> null
+        }
+    }
+`,
+		},
+		"force-new update (whole block)": {
+			Action:       plans.DeleteThenCreate,
+			ActionReason: plans.ResourceInstanceReplaceBecauseCannotUpdate,
+			Mode:         addrs.ManagedResourceMode,
+			Before: cty.ObjectVal(map[string]cty.Value{
+				"id":  cty.StringVal("i-02ae66f368e8518a9"),
+				"ami": cty.StringVal("ami-BEFORE"),
+				"root_block_device": cty.SetVal([]cty.Value{
+					cty.ObjectVal(map[string]cty.Value{
+						"volume_type": cty.StringVal("gp2"),
+					}),
+				}),
+				"disks": cty.SetVal([]cty.Value{
+					cty.ObjectVal(map[string]cty.Value{
+						"mount_point": cty.StringVal("/var/diska"),
+						"size":        cty.StringVal("50GB"),
+					}),
+				}),
+			}),
+			After: cty.ObjectVal(map[string]cty.Value{
+				"id":  cty.StringVal("i-02ae66f368e8518a9"),
+				"ami": cty.StringVal("ami-AFTER"),
+				"root_block_device": cty.SetVal([]cty.Value{
+					cty.ObjectVal(map[string]cty.Value{
+						"volume_type": cty.StringVal("different"),
+					}),
+				}),
+				"disks": cty.SetVal([]cty.Value{
+					cty.ObjectVal(map[string]cty.Value{
+						"mount_point": cty.StringVal("/var/diskb"),
+						"size":        cty.StringVal("50GB"),
+					}),
+				}),
+			}),
+			RequiredReplace: cty.NewPathSet(
+				cty.Path{cty.GetAttrStep{Name: "root_block_device"}},
+				cty.Path{cty.GetAttrStep{Name: "disks"}},
+			),
+			Schema: testSchema(configschema.NestingSet),
+			ExpectedOutput: `  # test_instance.example must be replaced
+-/+ resource "test_instance" "example" {
+      ~ ami   = "ami-BEFORE" -> "ami-AFTER"
+      ~ disks = [
+          - { # forces replacement
+            - mount_point = "/var/diska" -> null
+            - size        = "50GB" -> null
+          },
+          + { # forces replacement
+            + mount_point = "/var/diskb"
+            + size        = "50GB"
+          },
+        ]
+        id    = "i-02ae66f368e8518a9"
+
+      + root_block_device { # forces replacement
+          + volume_type = "different"
+        }
+      - root_block_device { # forces replacement
+          - volume_type = "gp2" -> null
+        }
+    }
+`,
+		},
+		"in-place update - deletion": {
+			Action: plans.Update,
+			Mode:   addrs.ManagedResourceMode,
+			Before: cty.ObjectVal(map[string]cty.Value{
+				"id":  cty.StringVal("i-02ae66f368e8518a9"),
+				"ami": cty.StringVal("ami-BEFORE"),
+				"root_block_device": cty.SetVal([]cty.Value{
+					cty.ObjectVal(map[string]cty.Value{
+						"volume_type": cty.StringVal("gp2"),
+						"new_field":   cty.StringVal("new_value"),
+					}),
+				}),
+				"disks": cty.SetVal([]cty.Value{
+					cty.ObjectVal(map[string]cty.Value{
+						"mount_point": cty.StringVal("/var/diska"),
+						"size":        cty.StringVal("50GB"),
+					}),
+				}),
+			}),
+			After: cty.ObjectVal(map[string]cty.Value{
+				"id":  cty.StringVal("i-02ae66f368e8518a9"),
+				"ami": cty.StringVal("ami-AFTER"),
+				"root_block_device": cty.SetValEmpty(cty.Object(map[string]cty.Type{
+					"volume_type": cty.String,
+					"new_field":   cty.String,
+				})),
+				"disks": cty.SetValEmpty(cty.Object(map[string]cty.Type{
+					"mount_point": cty.String,
+					"size":        cty.String,
+				})),
+			}),
+			RequiredReplace: cty.NewPathSet(),
+			Schema:          testSchemaPlus(configschema.NestingSet),
+			ExpectedOutput: `  # test_instance.example will be updated in-place
+  ~ resource "test_instance" "example" {
+      ~ ami   = "ami-BEFORE" -> "ami-AFTER"
+      ~ disks = [
+          - {
+            - mount_point = "/var/diska" -> null
+            - size        = "50GB" -> null
+          },
+        ]
+        id    = "i-02ae66f368e8518a9"
+
+      - root_block_device {
+          - new_field   = "new_value" -> null
+          - volume_type = "gp2" -> null
+        }
+    }
+`,
+		},
+	}
+	runTestCases(t, testCases)
+}
+
+func TestResourceChange_nestedMap(t *testing.T) {
+	testCases := map[string]testCase{
+		"in-place update - creation": {
+			Action: plans.Update,
+			Mode:   addrs.ManagedResourceMode,
+			Before: cty.ObjectVal(map[string]cty.Value{
+				"id":  cty.StringVal("i-02ae66f368e8518a9"),
+				"ami": cty.StringVal("ami-BEFORE"),
+				"disks": cty.MapValEmpty(cty.Object(map[string]cty.Type{
+					"mount_point": cty.String,
+					"size":        cty.String,
+				})),
+				"root_block_device": cty.MapValEmpty(cty.Object(map[string]cty.Type{
+					"volume_type": cty.String,
+				})),
+			}),
+			After: cty.ObjectVal(map[string]cty.Value{
+				"id":  cty.StringVal("i-02ae66f368e8518a9"),
+				"ami": cty.StringVal("ami-AFTER"),
+				"disks": cty.MapVal(map[string]cty.Value{
+					"disk_a": cty.ObjectVal(map[string]cty.Value{
+						"mount_point": cty.StringVal("/var/diska"),
+						"size":        cty.NullVal(cty.String),
+					}),
+				}),
+				"root_block_device": cty.MapVal(map[string]cty.Value{
+					"a": cty.ObjectVal(map[string]cty.Value{
+						"volume_type": cty.StringVal("gp2"),
+					}),
+				}),
+			}),
+			RequiredReplace: cty.NewPathSet(),
+			Schema:          testSchema(configschema.NestingMap),
+			ExpectedOutput: `  # test_instance.example will be updated in-place
+  ~ resource "test_instance" "example" {
+      ~ ami   = "ami-BEFORE" -> "ami-AFTER"
+      ~ disks = {
+          + "disk_a" = {
+            + mount_point = "/var/diska"
+          },
+        }
+        id    = "i-02ae66f368e8518a9"
+
+      + root_block_device "a" {
+          + volume_type = "gp2"
+        }
+    }
+`,
+		},
+		"in-place update - change attr": {
+			Action: plans.Update,
+			Mode:   addrs.ManagedResourceMode,
+			Before: cty.ObjectVal(map[string]cty.Value{
+				"id":  cty.StringVal("i-02ae66f368e8518a9"),
+				"ami": cty.StringVal("ami-BEFORE"),
+				"disks": cty.MapVal(map[string]cty.Value{
+					"disk_a": cty.ObjectVal(map[string]cty.Value{
+						"mount_point": cty.StringVal("/var/diska"),
+						"size":        cty.NullVal(cty.String),
+					}),
+				}),
+				"root_block_device": cty.MapVal(map[string]cty.Value{
+					"a": cty.ObjectVal(map[string]cty.Value{
+						"volume_type": cty.StringVal("gp2"),
+						"new_field":   cty.NullVal(cty.String),
+					}),
+				}),
+			}),
+			After: cty.ObjectVal(map[string]cty.Value{
+				"id":  cty.StringVal("i-02ae66f368e8518a9"),
+				"ami": cty.StringVal("ami-AFTER"),
+				"disks": cty.MapVal(map[string]cty.Value{
+					"disk_a": cty.ObjectVal(map[string]cty.Value{
+						"mount_point": cty.StringVal("/var/diska"),
+						"size":        cty.StringVal("50GB"),
+					}),
+				}),
+				"root_block_device": cty.MapVal(map[string]cty.Value{
+					"a": cty.ObjectVal(map[string]cty.Value{
+						"volume_type": cty.StringVal("gp2"),
+						"new_field":   cty.StringVal("new_value"),
+					}),
+				}),
+			}),
+			RequiredReplace: cty.NewPathSet(),
+			Schema:          testSchemaPlus(configschema.NestingMap),
+			ExpectedOutput: `  # test_instance.example will be updated in-place
+  ~ resource "test_instance" "example" {
+      ~ ami   = "ami-BEFORE" -> "ami-AFTER"
+      ~ disks = {
+          ~ "disk_a" = {
+            + size        = "50GB"
+              # (1 unchanged attribute hidden)
+          },
+        }
+        id    = "i-02ae66f368e8518a9"
+
+      ~ root_block_device "a" {
+          + new_field   = "new_value"
+            # (1 unchanged attribute hidden)
+        }
+    }
+`,
+		},
+		"in-place update - insertion": {
+			Action: plans.Update,
+			Mode:   addrs.ManagedResourceMode,
+			Before: cty.ObjectVal(map[string]cty.Value{
+				"id":  cty.StringVal("i-02ae66f368e8518a9"),
+				"ami": cty.StringVal("ami-BEFORE"),
+				"disks": cty.MapVal(map[string]cty.Value{
+					"disk_a": cty.ObjectVal(map[string]cty.Value{
+						"mount_point": cty.StringVal("/var/diska"),
+						"size":        cty.StringVal("50GB"),
+					}),
+				}),
+				"root_block_device": cty.MapVal(map[string]cty.Value{
+					"a": cty.ObjectVal(map[string]cty.Value{
+						"volume_type": cty.StringVal("gp2"),
+						"new_field":   cty.NullVal(cty.String),
+					}),
+				}),
+			}),
+			After: cty.ObjectVal(map[string]cty.Value{
+				"id":  cty.StringVal("i-02ae66f368e8518a9"),
+				"ami": cty.StringVal("ami-AFTER"),
+				"disks": cty.MapVal(map[string]cty.Value{
+					"disk_a": cty.ObjectVal(map[string]cty.Value{
+						"mount_point": cty.StringVal("/var/diska"),
+						"size":        cty.StringVal("50GB"),
+					}),
+					"disk_2": cty.ObjectVal(map[string]cty.Value{
+						"mount_point": cty.StringVal("/var/disk2"),
+						"size":        cty.StringVal("50GB"),
+					}),
+				}),
+				"root_block_device": cty.MapVal(map[string]cty.Value{
+					"a": cty.ObjectVal(map[string]cty.Value{
+						"volume_type": cty.StringVal("gp2"),
+						"new_field":   cty.NullVal(cty.String),
+					}),
+					"b": cty.ObjectVal(map[string]cty.Value{
+						"volume_type": cty.StringVal("gp2"),
+						"new_field":   cty.StringVal("new_value"),
+					}),
+				}),
+			}),
+			RequiredReplace: cty.NewPathSet(),
+			Schema:          testSchemaPlus(configschema.NestingMap),
+			ExpectedOutput: `  # test_instance.example will be updated in-place
+  ~ resource "test_instance" "example" {
+      ~ ami   = "ami-BEFORE" -> "ami-AFTER"
+      ~ disks = {
+          + "disk_2" = {
+            + mount_point = "/var/disk2"
+            + size        = "50GB"
+          },
+          # (1 unchanged element hidden)
+        }
+        id    = "i-02ae66f368e8518a9"
+
+      + root_block_device "b" {
+          + new_field   = "new_value"
+          + volume_type = "gp2"
+        }
+        # (1 unchanged block hidden)
+    }
+`,
+		},
+		"force-new update (whole block)": {
+			Action:       plans.DeleteThenCreate,
+			ActionReason: plans.ResourceInstanceReplaceBecauseCannotUpdate,
+			Mode:         addrs.ManagedResourceMode,
+			Before: cty.ObjectVal(map[string]cty.Value{
+				"id":  cty.StringVal("i-02ae66f368e8518a9"),
+				"ami": cty.StringVal("ami-BEFORE"),
+				"disks": cty.MapVal(map[string]cty.Value{
+					"disk_a": cty.ObjectVal(map[string]cty.Value{
+						"mount_point": cty.StringVal("/var/diska"),
+						"size":        cty.StringVal("50GB"),
+					}),
+				}),
+				"root_block_device": cty.MapVal(map[string]cty.Value{
+					"a": cty.ObjectVal(map[string]cty.Value{
+						"volume_type": cty.StringVal("gp2"),
+					}),
+					"b": cty.ObjectVal(map[string]cty.Value{
+						"volume_type": cty.StringVal("standard"),
+					}),
+				}),
+			}),
+			After: cty.ObjectVal(map[string]cty.Value{
+				"id":  cty.StringVal("i-02ae66f368e8518a9"),
+				"ami": cty.StringVal("ami-AFTER"),
+				"disks": cty.MapVal(map[string]cty.Value{
+					"disk_a": cty.ObjectVal(map[string]cty.Value{
+						"mount_point": cty.StringVal("/var/diska"),
+						"size":        cty.StringVal("100GB"),
+					}),
+				}),
+				"root_block_device": cty.MapVal(map[string]cty.Value{
+					"a": cty.ObjectVal(map[string]cty.Value{
+						"volume_type": cty.StringVal("different"),
+					}),
+					"b": cty.ObjectVal(map[string]cty.Value{
+						"volume_type": cty.StringVal("standard"),
+					}),
+				}),
+			}),
+			RequiredReplace: cty.NewPathSet(cty.Path{
+				cty.GetAttrStep{Name: "root_block_device"},
+				cty.IndexStep{Key: cty.StringVal("a")},
+			},
+				cty.Path{cty.GetAttrStep{Name: "disks"}},
+			),
+			Schema: testSchema(configschema.NestingMap),
+			ExpectedOutput: `  # test_instance.example must be replaced
+-/+ resource "test_instance" "example" {
+      ~ ami   = "ami-BEFORE" -> "ami-AFTER"
+      ~ disks = {
+          ~ "disk_a" = { # forces replacement
+            ~ size        = "50GB" -> "100GB"
+              # (1 unchanged attribute hidden)
+          },
+        }
+        id    = "i-02ae66f368e8518a9"
+
+      ~ root_block_device "a" { # forces replacement
+          ~ volume_type = "gp2" -> "different"
+        }
+        # (1 unchanged block hidden)
+    }
+`,
+		},
+		"in-place update - deletion": {
+			Action: plans.Update,
+			Mode:   addrs.ManagedResourceMode,
+			Before: cty.ObjectVal(map[string]cty.Value{
+				"id":  cty.StringVal("i-02ae66f368e8518a9"),
+				"ami": cty.StringVal("ami-BEFORE"),
+				"disks": cty.MapVal(map[string]cty.Value{
+					"disk_a": cty.ObjectVal(map[string]cty.Value{
+						"mount_point": cty.StringVal("/var/diska"),
+						"size":        cty.StringVal("50GB"),
+					}),
+				}),
+				"root_block_device": cty.MapVal(map[string]cty.Value{
+					"a": cty.ObjectVal(map[string]cty.Value{
+						"volume_type": cty.StringVal("gp2"),
+						"new_field":   cty.StringVal("new_value"),
+					}),
+				}),
+			}),
+			After: cty.ObjectVal(map[string]cty.Value{
+				"id":  cty.StringVal("i-02ae66f368e8518a9"),
+				"ami": cty.StringVal("ami-AFTER"),
+				"disks": cty.MapValEmpty(cty.Object(map[string]cty.Type{
+					"mount_point": cty.String,
+					"size":        cty.String,
+				})),
+				"root_block_device": cty.MapValEmpty(cty.Object(map[string]cty.Type{
+					"volume_type": cty.String,
+					"new_field":   cty.String,
+				})),
+			}),
+			RequiredReplace: cty.NewPathSet(),
+			Schema:          testSchemaPlus(configschema.NestingMap),
+			ExpectedOutput: `  # test_instance.example will be updated in-place
+  ~ resource "test_instance" "example" {
+      ~ ami   = "ami-BEFORE" -> "ami-AFTER"
+      ~ disks = {
+          - "disk_a" = {
+            - mount_point = "/var/diska" -> null
+            - size        = "50GB" -> null
+          },
+        }
+        id    = "i-02ae66f368e8518a9"
+
+      - root_block_device "a" {
+          - new_field   = "new_value" -> null
+          - volume_type = "gp2" -> null
         }
     }
 `,
@@ -3685,7 +3196,6 @@ func TestResourceChange_sensitiveVariable(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			Schema: &configschema.Block{
 				Attributes: map[string]*configschema.Attribute{
 					"id":         {Type: cty.String, Optional: true, Computed: true},
@@ -3838,7 +3348,6 @@ func TestResourceChange_sensitiveVariable(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			Schema: &configschema.Block{
 				Attributes: map[string]*configschema.Attribute{
 					"id":          {Type: cty.String, Optional: true, Computed: true},
@@ -3974,7 +3483,6 @@ func TestResourceChange_sensitiveVariable(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			Schema: &configschema.Block{
 				Attributes: map[string]*configschema.Attribute{
 					"id":         {Type: cty.String, Optional: true, Computed: true},
@@ -4110,7 +3618,6 @@ func TestResourceChange_sensitiveVariable(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			Schema: &configschema.Block{
 				Attributes: map[string]*configschema.Attribute{
 					"id":         {Type: cty.String, Optional: true, Computed: true},
@@ -4248,7 +3755,6 @@ func TestResourceChange_sensitiveVariable(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			Schema: &configschema.Block{
 				Attributes: map[string]*configschema.Attribute{
 					"id":          {Type: cty.String, Optional: true, Computed: true},
@@ -4381,7 +3887,6 @@ func TestResourceChange_sensitiveVariable(t *testing.T) {
 				},
 			},
 			RequiredReplace: cty.NewPathSet(),
-			Tainted:         false,
 			Schema: &configschema.Block{
 				Attributes: map[string]*configschema.Attribute{
 					"id":         {Type: cty.String, Optional: true, Computed: true},
@@ -4484,7 +3989,6 @@ func TestResourceChange_sensitiveVariable(t *testing.T) {
 				cty.GetAttrPath("ami"),
 				cty.GetAttrPath("nested_block_set"),
 			),
-			Tainted: false,
 			ExpectedOutput: `  # test_instance.example must be replaced
 -/+ resource "test_instance" "example" {
       ~ ami = (sensitive) # forces replacement
@@ -4497,12 +4001,85 @@ func TestResourceChange_sensitiveVariable(t *testing.T) {
     }
 `,
 		},
+		"update with sensitive attribute forcing replacement": {
+			Action: plans.DeleteThenCreate,
+			Mode:   addrs.ManagedResourceMode,
+			Before: cty.ObjectVal(map[string]cty.Value{
+				"id":  cty.StringVal("i-02ae66f368e8518a9"),
+				"ami": cty.StringVal("ami-BEFORE"),
+			}),
+			After: cty.ObjectVal(map[string]cty.Value{
+				"id":  cty.StringVal("i-02ae66f368e8518a9"),
+				"ami": cty.StringVal("ami-AFTER"),
+			}),
+			Schema: &configschema.Block{
+				Attributes: map[string]*configschema.Attribute{
+					"id":  {Type: cty.String, Optional: true, Computed: true},
+					"ami": {Type: cty.String, Optional: true, Computed: true, Sensitive: true},
+				},
+			},
+			RequiredReplace: cty.NewPathSet(
+				cty.GetAttrPath("ami"),
+			),
+			ExpectedOutput: `  # test_instance.example must be replaced
+-/+ resource "test_instance" "example" {
+      ~ ami = (sensitive value) # forces replacement
+        id  = "i-02ae66f368e8518a9"
+    }
+`,
+		},
+		"update with sensitive nested type attribute forcing replacement": {
+			Action: plans.DeleteThenCreate,
+			Mode:   addrs.ManagedResourceMode,
+			Before: cty.ObjectVal(map[string]cty.Value{
+				"id": cty.StringVal("i-02ae66f368e8518a9"),
+				"conn_info": cty.ObjectVal(map[string]cty.Value{
+					"user":     cty.StringVal("not-secret"),
+					"password": cty.StringVal("top-secret"),
+				}),
+			}),
+			After: cty.ObjectVal(map[string]cty.Value{
+				"id": cty.StringVal("i-02ae66f368e8518a9"),
+				"conn_info": cty.ObjectVal(map[string]cty.Value{
+					"user":     cty.StringVal("not-secret"),
+					"password": cty.StringVal("new-secret"),
+				}),
+			}),
+			Schema: &configschema.Block{
+				Attributes: map[string]*configschema.Attribute{
+					"id": {Type: cty.String, Optional: true, Computed: true},
+					"conn_info": {
+						NestedType: &configschema.Object{
+							Nesting: configschema.NestingSingle,
+							Attributes: map[string]*configschema.Attribute{
+								"user":     {Type: cty.String, Optional: true},
+								"password": {Type: cty.String, Optional: true, Sensitive: true},
+							},
+						},
+					},
+				},
+			},
+			RequiredReplace: cty.NewPathSet(
+				cty.GetAttrPath("conn_info"),
+				cty.GetAttrPath("password"),
+			),
+			ExpectedOutput: `  # test_instance.example must be replaced
+-/+ resource "test_instance" "example" {
+      ~ conn_info = { # forces replacement
+        ~ password = (sensitive value)
+          # (1 unchanged attribute hidden)
+      }
+        id        = "i-02ae66f368e8518a9"
+    }
+`,
+		},
 	}
 	runTestCases(t, testCases)
 }
 
 type testCase struct {
 	Action          plans.Action
+	ActionReason    plans.ResourceInstanceChangeActionReason
 	Mode            addrs.ResourceMode
 	Before          cty.Value
 	BeforeValMarks  []cty.PathValueMarks
@@ -4510,12 +4087,7 @@ type testCase struct {
 	After           cty.Value
 	Schema          *configschema.Block
 	RequiredReplace cty.PathSet
-	Tainted         bool
 	ExpectedOutput  string
-
-	// This field and all associated values can be removed if the concise diff
-	// experiment succeeds.
-	VerboseOutput string
 }
 
 func runTestCases(t *testing.T, testCases map[string]testCase) {
@@ -4566,27 +4138,14 @@ func runTestCases(t *testing.T, testCases map[string]testCase) {
 					BeforeValMarks: tc.BeforeValMarks,
 					AfterValMarks:  tc.AfterValMarks,
 				},
+				ActionReason:    tc.ActionReason,
 				RequiredReplace: tc.RequiredReplace,
 			}
 
-			experiment.SetEnabled(experiment.X_concise_diff, true)
-			output := ResourceChange(change, tc.Tainted, tc.Schema, color)
+			output := ResourceChange(change, tc.Schema, color)
 			if output != tc.ExpectedOutput {
 				t.Errorf("Unexpected diff.\ngot:\n%s\nwant:\n%s\n", output, tc.ExpectedOutput)
 				t.Errorf("%s", cmp.Diff(output, tc.ExpectedOutput))
-			}
-
-			// Temporary coverage for verbose diff behaviour. All lines below
-			// in this function can be removed if the concise diff experiment
-			// succeeds.
-			if tc.VerboseOutput == "" {
-				return
-			}
-			experiment.SetEnabled(experiment.X_concise_diff, false)
-			output = ResourceChange(change, tc.Tainted, tc.Schema, color)
-			if output != tc.VerboseOutput {
-				t.Errorf("Unexpected diff.\ngot:\n%s\nwant:\n%s\n", output, tc.VerboseOutput)
-				t.Errorf("%s", cmp.Diff(output, tc.VerboseOutput))
 			}
 		})
 	}
@@ -4694,7 +4253,6 @@ func TestOutputChanges(t *testing.T) {
 
 	for name, tc := range testCases {
 		t.Run(name, func(t *testing.T) {
-			experiment.SetEnabled(experiment.X_concise_diff, true)
 			output := OutputChanges(tc.changes, color)
 			if output != tc.output {
 				t.Errorf("Unexpected diff.\ngot:\n%s\nwant:\n%s\n", output, tc.output)
@@ -4722,4 +4280,75 @@ func outputChange(name string, before, after cty.Value, sensitive bool) *plans.O
 	}
 
 	return changeSrc
+}
+
+// A basic test schema using a configurable NestingMode for one (NestedType) attribute and one block
+func testSchema(nesting configschema.NestingMode) *configschema.Block {
+	return &configschema.Block{
+		Attributes: map[string]*configschema.Attribute{
+			"id":  {Type: cty.String, Optional: true, Computed: true},
+			"ami": {Type: cty.String, Optional: true},
+			"disks": {
+				NestedType: &configschema.Object{
+					Attributes: map[string]*configschema.Attribute{
+						"mount_point": {Type: cty.String, Optional: true},
+						"size":        {Type: cty.String, Optional: true},
+					},
+					Nesting: nesting,
+				},
+			},
+		},
+		BlockTypes: map[string]*configschema.NestedBlock{
+			"root_block_device": {
+				Block: configschema.Block{
+					Attributes: map[string]*configschema.Attribute{
+						"volume_type": {
+							Type:     cty.String,
+							Optional: true,
+							Computed: true,
+						},
+					},
+				},
+				Nesting: nesting,
+			},
+		},
+	}
+}
+
+// similar to testSchema with the addition of a "new_field" block
+func testSchemaPlus(nesting configschema.NestingMode) *configschema.Block {
+	return &configschema.Block{
+		Attributes: map[string]*configschema.Attribute{
+			"id":  {Type: cty.String, Optional: true, Computed: true},
+			"ami": {Type: cty.String, Optional: true},
+			"disks": {
+				NestedType: &configschema.Object{
+					Attributes: map[string]*configschema.Attribute{
+						"mount_point": {Type: cty.String, Optional: true},
+						"size":        {Type: cty.String, Optional: true},
+					},
+					Nesting: nesting,
+				},
+			},
+		},
+		BlockTypes: map[string]*configschema.NestedBlock{
+			"root_block_device": {
+				Block: configschema.Block{
+					Attributes: map[string]*configschema.Attribute{
+						"volume_type": {
+							Type:     cty.String,
+							Optional: true,
+							Computed: true,
+						},
+						"new_field": {
+							Type:     cty.String,
+							Optional: true,
+							Computed: true,
+						},
+					},
+				},
+				Nesting: nesting,
+			},
+		},
+	}
 }

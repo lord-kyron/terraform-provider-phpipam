@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	getter "github.com/hashicorp/go-getter"
+	"github.com/hashicorp/terraform-exec/tfexec"
 )
 
 const subprocessCurrentSigil = "4acd63807899403ca4859f5bb948d2c6"
@@ -23,8 +24,8 @@ const subprocessPreviousSigil = "2279afb8cf71423996be1fd65d32f13b"
 // available for upgrade tests, and then will return an object containing the
 // results of that initialization which can then be stored in a global variable
 // for use in other tests.
-func AutoInitProviderHelper(name string, sourceDir string) *Helper {
-	helper, err := AutoInitHelper("terraform-provider-"+name, sourceDir)
+func AutoInitProviderHelper(sourceDir string) *Helper {
+	helper, err := AutoInitHelper(sourceDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cannot run Terraform provider tests: %s\n", err)
 		os.Exit(1)
@@ -39,10 +40,12 @@ type Helper struct {
 
 	// sourceDir is the dir containing the provider source code, needed
 	// for tests that use fixture files.
-	sourceDir                    string
-	pluginName                   string
-	terraformExec                string
-	thisPluginDir, prevPluginDir string
+	sourceDir     string
+	terraformExec string
+
+	// execTempDir is created during DiscoverConfig to store any downloaded
+	// binaries
+	execTempDir string
 }
 
 // AutoInitHelper uses the auto-discovery behavior of DiscoverConfig to prepare
@@ -50,8 +53,8 @@ type Helper struct {
 // way to get the standard init behavior based on environment variables, and
 // callers should use this unless they have an unusual requirement that calls
 // for constructing a config in a different way.
-func AutoInitHelper(pluginName string, sourceDir string) (*Helper, error) {
-	config, err := DiscoverConfig(pluginName, sourceDir)
+func AutoInitHelper(sourceDir string) (*Helper, error) {
+	config, err := DiscoverConfig(sourceDir)
 	if err != nil {
 		return nil, err
 	}
@@ -70,54 +73,16 @@ func AutoInitHelper(pluginName string, sourceDir string) (*Helper, error) {
 // automatically clean those up.
 func InitHelper(config *Config) (*Helper, error) {
 	tempDir := os.Getenv("TF_ACC_TEMP_DIR")
-	baseDir, err := ioutil.TempDir(tempDir, "tftest-"+config.PluginName)
+	baseDir, err := ioutil.TempDir(tempDir, "tftest")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temporary directory for test helper: %s", err)
-	}
-
-	var thisPluginDir, prevPluginDir string
-	if config.CurrentPluginExec != "" {
-		thisPluginDir, err = ioutil.TempDir(baseDir, "plugins-current")
-		if err != nil {
-			return nil, fmt.Errorf("failed to create temporary directory for -plugin-dir: %s", err)
-		}
-		currentExecPath := filepath.Join(thisPluginDir, config.PluginName)
-		err = symlinkFile(config.CurrentPluginExec, currentExecPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create symlink at %s to %s: %s", currentExecPath, config.CurrentPluginExec, err)
-		}
-
-		err = symlinkAuxiliaryProviders(thisPluginDir)
-		if err != nil {
-			return nil, fmt.Errorf("failed to symlink auxiliary providers: %s", err)
-		}
-	} else {
-		return nil, fmt.Errorf("CurrentPluginExec is not set")
-	}
-	if config.PreviousPluginExec != "" {
-		prevPluginDir, err = ioutil.TempDir(baseDir, "plugins-previous")
-		if err != nil {
-			return nil, fmt.Errorf("failed to create temporary directory for previous -plugin-dir: %s", err)
-		}
-		prevExecPath := filepath.Join(prevPluginDir, config.PluginName)
-		err = symlinkFile(config.PreviousPluginExec, prevExecPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create symlink at %s to %s: %s", prevExecPath, config.PreviousPluginExec, err)
-		}
-
-		err = symlinkAuxiliaryProviders(prevPluginDir)
-		if err != nil {
-			return nil, fmt.Errorf("failed to symlink auxiliary providers: %s", err)
-		}
 	}
 
 	return &Helper{
 		baseDir:       baseDir,
 		sourceDir:     config.SourceDir,
-		pluginName:    config.PluginName,
 		terraformExec: config.TerraformExec,
-		thisPluginDir: thisPluginDir,
-		prevPluginDir: prevPluginDir,
+		execTempDir:   config.execTempDir,
 	}, nil
 }
 
@@ -181,7 +146,7 @@ func symlinkAuxiliaryProviders(pluginDir string) error {
 		if filenameExt == ".zip" {
 			_, err = os.Stat(path)
 			if os.IsNotExist(err) {
-				zipDecompressor.Decompress(path, filepath.Join(auxiliaryProviderDir, filename), false)
+				zipDecompressor.Decompress(path, filepath.Join(auxiliaryProviderDir, filename), false, 0)
 			} else if err != nil {
 				return fmt.Errorf("Unexpected error: %s", err)
 			}
@@ -202,6 +167,12 @@ func symlinkAuxiliaryProviders(pluginDir string) error {
 // Call this before returning from TestMain to minimize the amount of detritus
 // left behind in the filesystem after the tests complete.
 func (h *Helper) Close() error {
+	if h.execTempDir != "" {
+		err := os.RemoveAll(h.execTempDir)
+		if err != nil {
+			return err
+		}
+	}
 	return os.RemoveAll(h.baseDir)
 }
 
@@ -217,22 +188,23 @@ func (h *Helper) NewWorkingDir() (*WorkingDir, error) {
 		return nil, err
 	}
 
-	// symlink the provider source files into the base directory
-	err = symlinkDir(h.sourceDir, dir)
+	// symlink the provider source files into the config directory
+	// e.g. testdata
+	err = symlinkDirectoriesOnly(h.sourceDir, dir)
 	if err != nil {
 		return nil, err
 	}
 
-	// symlink the provider binaries into the base directory
-	err = symlinkDir(h.thisPluginDir, dir)
+	tf, err := tfexec.NewTerraform(dir, h.terraformExec)
 	if err != nil {
 		return nil, err
 	}
 
 	return &WorkingDir{
-		h:        h,
-		baseArgs: []string{"-no-color"},
-		baseDir:  dir,
+		h:             h,
+		tf:            tf,
+		baseDir:       dir,
+		terraformExec: h.terraformExec,
 	}, nil
 }
 
@@ -251,35 +223,8 @@ func (h *Helper) RequireNewWorkingDir(t TestControl) *WorkingDir {
 	return wd
 }
 
-// HasPreviousVersion returns true if and only if the receiving helper has a
-// previous plugin version available for use in tests.
-func (h *Helper) HasPreviousVersion() bool {
-	return h.prevPluginDir != ""
-}
-
 // TerraformExecPath returns the location of the Terraform CLI executable that
 // should be used when running tests.
 func (h *Helper) TerraformExecPath() string {
 	return h.terraformExec
-}
-
-// PluginDir returns the directory that should be used as the -plugin-dir when
-// running "terraform init" in order to make Terraform detect the current
-// version of the plugin.
-func (h *Helper) PluginDir() string {
-	return h.thisPluginDir
-}
-
-// PreviousPluginDir returns the directory that should be used as the -plugin-dir
-// when running "terraform init" in order to make Terraform detect the previous
-// version of the plugin, if available.
-//
-// If no previous version is available, this method will panic. Use
-// RequirePreviousVersion or HasPreviousVersion to ensure a previous version is
-// available before calling this.
-func (h *Helper) PreviousPluginDir() string {
-	if h.prevPluginDir != "" {
-		panic("PreviousPluginDir not available")
-	}
-	return h.prevPluginDir
 }

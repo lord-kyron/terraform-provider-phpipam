@@ -1,12 +1,13 @@
 package command
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
 	"github.com/hashicorp/terraform/addrs"
+	"github.com/hashicorp/terraform/command/arguments"
 	"github.com/hashicorp/terraform/command/clistate"
+	"github.com/hashicorp/terraform/command/views"
 	"github.com/hashicorp/terraform/states"
 	"github.com/hashicorp/terraform/tfdiags"
 	"github.com/mitchellh/cli"
@@ -25,7 +26,7 @@ func (c *StateReplaceProviderCommand) Run(args []string) int {
 	args = c.Meta.process(args)
 
 	var autoApprove bool
-	cmdFlags := c.Meta.defaultFlagSet("state replace-provider")
+	cmdFlags := c.Meta.ignoreRemoteVersionFlagSet("state replace-provider")
 	cmdFlags.BoolVar(&autoApprove, "auto-approve", false, "skip interactive approval of replacements")
 	cmdFlags.StringVar(&c.backupPath, "backup", "-", "backup")
 	cmdFlags.BoolVar(&c.Meta.stateLock, "lock", true, "lock states")
@@ -74,12 +75,16 @@ func (c *StateReplaceProviderCommand) Run(args []string) int {
 
 	// Acquire lock if requested
 	if c.stateLock {
-		stateLocker := clistate.NewLocker(context.Background(), c.stateLockTimeout, c.Ui, c.Colorize())
-		if err := stateLocker.Lock(stateMgr, "state-replace-provider"); err != nil {
-			c.Ui.Error(fmt.Sprintf("Error locking source state: %s", err))
+		stateLocker := clistate.NewLocker(c.stateLockTimeout, views.NewStateLocker(arguments.ViewHuman, c.View))
+		if diags := stateLocker.Lock(stateMgr, "state-replace-provider"); diags.HasErrors() {
+			c.showDiagnostics(diags)
 			return 1
 		}
-		defer stateLocker.Unlock(nil)
+		defer func() {
+			if diags := stateLocker.Unlock(); diags.HasErrors() {
+				c.showDiagnostics(diags)
+			}
+		}()
 	}
 
 	// Refresh and load state
@@ -90,7 +95,7 @@ func (c *StateReplaceProviderCommand) Run(args []string) int {
 
 	state := stateMgr.State()
 	if state == nil {
-		c.Ui.Error(fmt.Sprintf(errStateNotFound))
+		c.Ui.Error(errStateNotFound)
 		return 1
 	}
 
@@ -119,7 +124,7 @@ func (c *StateReplaceProviderCommand) Run(args []string) int {
 	// Explain the changes
 	colorize := c.Colorize()
 	c.Ui.Output("Terraform will perform the following actions:\n")
-	c.Ui.Output(colorize.Color(fmt.Sprintf("  [yellow]~[reset] Updating provider:")))
+	c.Ui.Output(colorize.Color("  [yellow]~[reset] Updating provider:"))
 	c.Ui.Output(colorize.Color(fmt.Sprintf("    [red]-[reset] %s", from)))
 	c.Ui.Output(colorize.Color(fmt.Sprintf("    [green]+[reset] %s\n", to)))
 
@@ -134,7 +139,7 @@ func (c *StateReplaceProviderCommand) Run(args []string) int {
 			"\n[bold]Do you want to make these changes?[reset]\n" +
 				"Only 'yes' will be accepted to continue.\n",
 		))
-		v, err := c.Ui.Ask(fmt.Sprintf("Enter a value:"))
+		v, err := c.Ui.Ask("Enter a value:")
 		if err != nil {
 			c.Ui.Error(fmt.Sprintf("Error asking for approval: %s", err))
 			return 1
@@ -166,25 +171,30 @@ func (c *StateReplaceProviderCommand) Run(args []string) int {
 
 func (c *StateReplaceProviderCommand) Help() string {
 	helpText := `
-Usage: terraform state replace-provider [options] FROM_PROVIDER_FQN TO_PROVIDER_FQN
+Usage: terraform [global options] state replace-provider [options] FROM_PROVIDER_FQN TO_PROVIDER_FQN
 
   Replace provider for resources in the Terraform state.
 
 Options:
 
-  -auto-approve       Skip interactive approval.
+  -auto-approve           Skip interactive approval.
 
-  -backup=PATH        Path where Terraform should write the backup for the
-                      state file. This can't be disabled. If not set, Terraform
-                      will write it to the same path as the state file with
-                      a ".backup" extension.
+  -backup=PATH            Path where Terraform should write the backup for the
+						  state file. This can't be disabled. If not set,
+						  Terraform will write it to the same path as the state
+						  file with a ".backup" extension.
 
-  -lock=true          Lock the state files when locking is supported.
+  -lock=true              Lock the state files when locking is supported.
 
-  -lock-timeout=0s    Duration to retry a state lock.
+  -lock-timeout=0s        Duration to retry a state lock.
 
-  -state=PATH         Path to the state file to update. Defaults to the configured
-                      backend, or "terraform.tfstate"
+  -state=PATH             Path to the state file to update. Defaults to the
+						  configured backend, or "terraform.tfstate"
+
+  -ignore-remote-version  Continue even if remote and local Terraform versions
+                          are incompatible. This may result in an unusable
+                          workspace, and should be used with extreme caution.
+
 `
 	return strings.TrimSpace(helpText)
 }
