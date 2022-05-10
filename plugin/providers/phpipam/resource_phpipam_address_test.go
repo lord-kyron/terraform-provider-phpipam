@@ -21,6 +21,14 @@ resource "phpipam_address" "address" {
 }
 `
 
+const testAccResourcePHPIPAMOptionalAddressConfig = `
+resource "phpipam_address" "address" {
+  subnet_id   = 3
+  description = "Terraform test address"
+  hostname    = "tf-test.cust1.local"
+}
+`
+
 const testAccResourcePHPIPAMAddressCustomFieldConfig = `
 resource "phpipam_address" "address" {
   subnet_id   = 3
@@ -55,6 +63,26 @@ func TestAccResourcePHPIPAMAddress(t *testing.T) {
 					testAccCheckResourcePHPIPAMAddressCreated,
 					resource.TestCheckResourceAttr("phpipam_address.address", "subnet_id", "3"),
 					resource.TestCheckResourceAttr("phpipam_address.address", "ip_address", "10.10.1.10"),
+					resource.TestCheckResourceAttr("phpipam_address.address", "description", "Terraform test address"),
+					resource.TestCheckResourceAttr("phpipam_address.address", "hostname", "tf-test.cust1.local"),
+				),
+			},
+		},
+	})
+}
+
+func TestAccResourcePHPIPAMOptionalAddress(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckResourcePHPIPAMAddressDeleted,
+		Steps: []resource.TestStep{
+			resource.TestStep{
+				Config: testAccResourcePHPIPAMOptionalAddressConfig,
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckResourcePHPIPAMAddressCreated,
+					resource.TestCheckResourceAttr("phpipam_address.address", "subnet_id", "3"),
+					resource.TestCheckNoResourceAttr("phpipam_address.address", "ip_address"),
 					resource.TestCheckResourceAttr("phpipam_address.address", "description", "Terraform test address"),
 					resource.TestCheckResourceAttr("phpipam_address.address", "hostname", "tf-test.cust1.local"),
 				),
