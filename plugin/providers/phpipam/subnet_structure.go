@@ -31,6 +31,7 @@ var resourceSubnetOptionalFields = linearSearchSlice{
 	"host_discovery_enabled",
 	"is_full",
 	"utilization_threshold",
+	"location_id",
 }
 
 // bareSubnetSchema returns a map[string]*schema.Schema with the schema used
