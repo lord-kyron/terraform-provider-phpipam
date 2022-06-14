@@ -39,6 +39,12 @@ func dataSourcePHPIPAMAddressRead(d *schema.ResourceData, meta interface{}) erro
 	case d.Get("ip_address").(string) != "":
 		out, err = c.GetAddressesByIP(d.Get("ip_address").(string))
 		if err != nil {
+			if strings.Contains(err.Error(), "Address not found") {
+				log.Printf("[DEBUG] Invalid IP address Seen with IPAddress: " + d.Get("ip_address").(string))
+				log.Printf(d.Get("ip_address").(string) + err.Error())
+				// IP not found by IP address
+				return nil
+			}
 			return err
 		}
 	case d.Get("subnet_id").(int) != 0 && (d.Get("description").(string) != "" || d.Get("hostname").(string) != "" || len(d.Get("custom_field_filter").(map[string]interface{})) > 0):
