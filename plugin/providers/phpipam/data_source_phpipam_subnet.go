@@ -27,11 +27,16 @@ func dataSourcePHPIPAMSubnetRead(d *schema.ResourceData, meta interface{}) error
 		if err != nil {
 			return err
 		}
-	case d.Get("subnet_address").(string) != "" && d.Get("subnet_mask").(int) != 0:
+	case d.Get("subnet_address").(string) != "" && d.Get("subnet_mask").(int) != 0 && d.Get("section_id").(int) == 0:
 		out, err = c.GetSubnetsByCIDR(fmt.Sprintf("%s/%d", d.Get("subnet_address"), d.Get("subnet_mask")))
 		if err != nil {
 			return err
 		}
+        case d.Get("subnet_address").(string) != "" && d.Get("subnet_mask").(int) != 0 && d.Get("section_id").(int) != 0:
+                out, err = c.GetSubnetsByCIDRAndSection(fmt.Sprintf("%s/%d", d.Get("subnet_address"), d.Get("subnet_mask")), d.Get("section_id").(int))
+                if err != nil {
+                        return err
+                }
 	case d.Get("section_id").(int) != 0 && (d.Get("description").(string) != "" || d.Get("description_match").(string) != "" || len(d.Get("custom_field_filter").(map[string]interface{})) > 0):
 		out, err = subnetSearchInSection(d, meta)
 		if err != nil {
