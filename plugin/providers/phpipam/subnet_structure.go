@@ -73,6 +73,9 @@ func bareSubnetSchema() map[string]*schema.Schema {
 		"nameserver_id": &schema.Schema{
 			Type: schema.TypeInt,
 		},
+		"nameservers": &schema.Schema{
+			Type: schema.TypeMap,
+		},
 		"show_name": &schema.Schema{
 			Type: schema.TypeBool,
 		},
@@ -112,12 +115,12 @@ func bareSubnetSchema() map[string]*schema.Schema {
 		"edit_date": &schema.Schema{
 			Type: schema.TypeString,
 		},
-                "gateway": &schema.Schema{
-                        Type: schema.TypeMap,
-                },
-                "gateway_id": &schema.Schema{
-                        Type: schema.TypeString,
-                },
+		"gateway": &schema.Schema{
+				Type: schema.TypeMap,
+		},
+		"gateway_id": &schema.Schema{
+				Type: schema.TypeString,
+		},
 		"custom_fields": &schema.Schema{
 			Type: schema.TypeMap,
 		},
@@ -239,6 +242,7 @@ func expandSubnet(d *schema.ResourceData) subnets.Subnet {
 		VRFID:          d.Get("vrf_id").(int),
 		MasterSubnetID: d.Get("master_subnet_id").(int),
 		NameserverID:   d.Get("nameserver_id").(int),
+		Nameservers:    d.Get("nameservers").(map[string]interface {}),
 		ShowName:       phpipam.BoolIntString(d.Get("show_name").(bool)),
 		Permissions:    d.Get("permissions").(string),
 		DNSRecursive:   phpipam.BoolIntString(d.Get("create_ptr_records").(bool)),
@@ -251,8 +255,8 @@ func expandSubnet(d *schema.ResourceData) subnets.Subnet {
 		IsFull:         phpipam.BoolIntString(d.Get("is_full").(bool)),
 		Threshold:      d.Get("utilization_threshold").(int),
 		Location:       d.Get("location_id").(int),
-		Gateway:	d.Get("gateway").(map[string]interface {}),
-		GatewayID:        d.Get("gateway_id").(string),
+		Gateway:	    d.Get("gateway").(map[string]interface {}),
+		GatewayID:      d.Get("gateway_id").(string),
 	}
 
 	return s
@@ -272,6 +276,7 @@ func flattenSubnet(s subnets.Subnet, d *schema.ResourceData) {
 	d.Set("vrf_id", s.VRFID)
 	d.Set("master_subnet_id", s.MasterSubnetID)
 	d.Set("nameserver_id", s.NameserverID)
+	d.Set("nameservers", s.Nameservers)
 	d.Set("show_name", s.ShowName)
 	d.Set("permissions", s.Permissions)
 	d.Set("create_ptr_records", s.DNSRecursive)
