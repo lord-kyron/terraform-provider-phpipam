@@ -4,7 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"log"
 	"os"
 	"reflect"
@@ -13,18 +16,27 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/hashicorp/go-cty/cty"
+	"github.com/hashicorp/errwrap"
 	multierror "github.com/hashicorp/go-multierror"
 	uuid "github.com/hashicorp/go-uuid"
+	version "github.com/hashicorp/go-version"
+	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/hclsyntax"
+	"github.com/hashicorp/terraform-plugin-sdk/internal/addrs"
+	"github.com/hashicorp/terraform-plugin-sdk/internal/configs"
+	"github.com/hashicorp/terraform-plugin-sdk/internal/configs/configschema"
+	"github.com/hashicorp/terraform-plugin-sdk/internal/configs/hcl2shim"
+	"github.com/hashicorp/terraform-plugin-sdk/internal/plans"
+	"github.com/hashicorp/terraform-plugin-sdk/internal/tfdiags"
+	tfversion "github.com/hashicorp/terraform-plugin-sdk/internal/version"
 	"github.com/mitchellh/copystructure"
-
-	"github.com/hashicorp/terraform-plugin-sdk/v2/internal/addrs"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/internal/configs/hcl2shim"
+	"github.com/zclconf/go-cty/cty"
+	ctyjson "github.com/zclconf/go-cty/cty/json"
 )
 
 const (
 	// StateVersion is the current version for our state file
-	stateVersion = 3
+	StateVersion = 3
 )
 
 // rootModulePath is the path of the root module
@@ -329,8 +341,8 @@ func (s *State) Remove(addr ...string) error {
 	defer s.Unlock()
 
 	// Filter out what we need to delete
-	filter := &stateFilter{State: s}
-	results, err := filter.filter(addr...)
+	filter := &StateFilter{State: s}
+	results, err := filter.Filter(addr...)
 	if err != nil {
 		return err
 	}
@@ -488,6 +500,43 @@ func (s *State) equal(other *State) bool {
 	return true
 }
 
+// MarshalEqual is similar to Equal but provides a stronger definition of
+// "equal", where two states are equal if and only if their serialized form
+// is byte-for-byte identical.
+//
+// This is primarily useful for callers that are trying to save snapshots
+// of state to persistent storage, allowing them to detect when a new
+// snapshot must be taken.
+//
+// Note that the serial number and lineage are included in the serialized form,
+// so it's the caller's responsibility to properly manage these attributes
+// so that this method is only called on two states that have the same
+// serial and lineage, unless detecting such differences is desired.
+func (s *State) MarshalEqual(other *State) bool {
+	if s == nil && other == nil {
+		return true
+	} else if s == nil || other == nil {
+		return false
+	}
+
+	recvBuf := &bytes.Buffer{}
+	otherBuf := &bytes.Buffer{}
+
+	err := WriteState(s, recvBuf)
+	if err != nil {
+		// should never happen, since we're writing to a buffer
+		panic(err)
+	}
+
+	err = WriteState(other, otherBuf)
+	if err != nil {
+		// should never happen, since we're writing to a buffer
+		panic(err)
+	}
+
+	return bytes.Equal(recvBuf.Bytes(), otherBuf.Bytes())
+}
+
 type StateAgeComparison int
 
 const (
@@ -570,6 +619,21 @@ func (s *State) DeepCopy() *State {
 	return copy.(*State)
 }
 
+// FromFutureTerraform checks if this state was written by a Terraform
+// version from the future.
+func (s *State) FromFutureTerraform() bool {
+	s.Lock()
+	defer s.Unlock()
+
+	// No TF version means it is certainly from the past
+	if s.TFVersion == "" {
+		return false
+	}
+
+	v := version.Must(version.NewVersion(s.TFVersion))
+	return tfversion.SemVer.LessThan(v)
+}
+
 func (s *State) Init() {
 	s.Lock()
 	defer s.Unlock()
@@ -578,7 +642,7 @@ func (s *State) Init() {
 
 func (s *State) init() {
 	if s.Version == 0 {
-		s.Version = stateVersion
+		s.Version = StateVersion
 	}
 
 	if s.moduleByPath(addrs.RootModuleInstance) == nil {
@@ -612,13 +676,9 @@ func (s *State) ensureHasLineage() {
 			panic(fmt.Errorf("Failed to generate lineage: %v", err))
 		}
 		s.Lineage = lineage
-		if os.Getenv("TF_ACC") == "" || os.Getenv("TF_ACC_STATE_LINEAGE") == "1" {
-			log.Printf("[DEBUG] New state was assigned lineage %q\n", s.Lineage)
-		}
+		log.Printf("[DEBUG] New state was assigned lineage %q\n", s.Lineage)
 	} else {
-		if os.Getenv("TF_ACC") == "" || os.Getenv("TF_ACC_STATE_LINEAGE") == "1" {
-			log.Printf("[TRACE] Preserving existing state lineage %q\n", s.Lineage)
-		}
+		log.Printf("[TRACE] Preserving existing state lineage %q\n", s.Lineage)
 	}
 }
 
@@ -720,6 +780,57 @@ type BackendState struct {
 	Hash      uint64          `json:"hash"`   // Hash of portion of configuration from config files
 }
 
+// Empty returns true if BackendState has no state.
+func (s *BackendState) Empty() bool {
+	return s == nil || s.Type == ""
+}
+
+// Config decodes the type-specific configuration object using the provided
+// schema and returns the result as a cty.Value.
+//
+// An error is returned if the stored configuration does not conform to the
+// given schema.
+func (s *BackendState) Config(schema *configschema.Block) (cty.Value, error) {
+	ty := schema.ImpliedType()
+	if s == nil {
+		return cty.NullVal(ty), nil
+	}
+	return ctyjson.Unmarshal(s.ConfigRaw, ty)
+}
+
+// SetConfig replaces (in-place) the type-specific configuration object using
+// the provided value and associated schema.
+//
+// An error is returned if the given value does not conform to the implied
+// type of the schema.
+func (s *BackendState) SetConfig(val cty.Value, schema *configschema.Block) error {
+	ty := schema.ImpliedType()
+	buf, err := ctyjson.Marshal(val, ty)
+	if err != nil {
+		return err
+	}
+	s.ConfigRaw = buf
+	return nil
+}
+
+// ForPlan produces an alternative representation of the reciever that is
+// suitable for storing in a plan. The current workspace must additionally
+// be provided, to be stored alongside the backend configuration.
+//
+// The backend configuration schema is required in order to properly
+// encode the backend-specific configuration settings.
+func (s *BackendState) ForPlan(schema *configschema.Block, workspaceName string) (*plans.Backend, error) {
+	if s == nil {
+		return nil, nil
+	}
+
+	configVal, err := s.Config(schema)
+	if err != nil {
+		return nil, errwrap.Wrapf("failed to decode backend config: {{err}}", err)
+	}
+	return plans.NewBackend(s.Type, configVal, schema, workspaceName)
+}
+
 // RemoteState is used to track the information about a remote
 // state store that we push/pull state to.
 type RemoteState struct {
@@ -753,6 +864,24 @@ func (r *RemoteState) Empty() bool {
 	defer r.Unlock()
 
 	return r.Type == ""
+}
+
+func (r *RemoteState) Equals(other *RemoteState) bool {
+	r.Lock()
+	defer r.Unlock()
+
+	if r.Type != other.Type {
+		return false
+	}
+	if len(r.Config) != len(other.Config) {
+		return false
+	}
+	for k, v := range r.Config {
+		if other.Config[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 // OutputState is used to track the state relevant to a single output.
@@ -899,6 +1028,103 @@ func (m *ModuleState) Equal(other *ModuleState) bool {
 	return true
 }
 
+// IsRoot says whether or not this module diff is for the root module.
+func (m *ModuleState) IsRoot() bool {
+	m.Lock()
+	defer m.Unlock()
+	return reflect.DeepEqual(m.Path, rootModulePath)
+}
+
+// IsDescendent returns true if other is a descendent of this module.
+func (m *ModuleState) IsDescendent(other *ModuleState) bool {
+	m.Lock()
+	defer m.Unlock()
+
+	i := len(m.Path)
+	return len(other.Path) > i && reflect.DeepEqual(other.Path[:i], m.Path)
+}
+
+// Orphans returns a list of keys of resources that are in the State
+// but aren't present in the configuration itself. Hence, these keys
+// represent the state of resources that are orphans.
+func (m *ModuleState) Orphans(c *configs.Module) []addrs.ResourceInstance {
+	m.Lock()
+	defer m.Unlock()
+
+	inConfig := make(map[string]struct{})
+	if c != nil {
+		for _, r := range c.ManagedResources {
+			inConfig[r.Addr().String()] = struct{}{}
+		}
+		for _, r := range c.DataResources {
+			inConfig[r.Addr().String()] = struct{}{}
+		}
+	}
+
+	var result []addrs.ResourceInstance
+	for k := range m.Resources {
+		// Since we've not yet updated state to use our new address format,
+		// we need to do some shimming here.
+		legacyAddr, err := parseResourceAddressInternal(k)
+		if err != nil {
+			// Suggests that the user tampered with the state, since we always
+			// generate valid internal addresses.
+			log.Printf("ModuleState has invalid resource key %q. Ignoring.", k)
+			continue
+		}
+
+		addr := legacyAddr.AbsResourceInstanceAddr().Resource
+		compareKey := addr.Resource.String() // compare by resource address, ignoring instance key
+		if _, exists := inConfig[compareKey]; !exists {
+			result = append(result, addr)
+		}
+	}
+	return result
+}
+
+// RemovedOutputs returns a list of outputs that are in the State but aren't
+// present in the configuration itself.
+func (s *ModuleState) RemovedOutputs(outputs map[string]*configs.Output) []addrs.OutputValue {
+	if outputs == nil {
+		// If we got no output map at all then we'll just treat our set of
+		// configured outputs as empty, since that suggests that they've all
+		// been removed by removing their containing module.
+		outputs = make(map[string]*configs.Output)
+	}
+
+	s.Lock()
+	defer s.Unlock()
+
+	var ret []addrs.OutputValue
+	for n := range s.Outputs {
+		if _, declared := outputs[n]; !declared {
+			ret = append(ret, addrs.OutputValue{
+				Name: n,
+			})
+		}
+	}
+
+	return ret
+}
+
+// View returns a view with the given resource prefix.
+func (m *ModuleState) View(id string) *ModuleState {
+	if m == nil {
+		return m
+	}
+
+	r := m.deepcopy()
+	for k := range r.Resources {
+		if id == k || strings.HasPrefix(k, id+".") {
+			continue
+		}
+
+		delete(r.Resources, k)
+	}
+
+	return r
+}
+
 func (m *ModuleState) init() {
 	m.Lock()
 	defer m.Unlock()
@@ -920,6 +1146,19 @@ func (m *ModuleState) init() {
 	for _, rs := range m.Resources {
 		rs.init()
 	}
+}
+
+func (m *ModuleState) deepcopy() *ModuleState {
+	if m == nil {
+		return nil
+	}
+
+	stateCopy, err := copystructure.Config{Lock: true}.Copy(m)
+	if err != nil {
+		panic(err)
+	}
+
+	return stateCopy.(*ModuleState)
 }
 
 // prune is used to remove any resources that are no longer required
@@ -1069,6 +1308,10 @@ func (m *ModuleState) String() string {
 	return buf.String()
 }
 
+func (m *ModuleState) Empty() bool {
+	return len(m.Locals) == 0 && len(m.Outputs) == 0 && len(m.Resources) == 0
+}
+
 // ResourceStateKey is a structured representation of the key used for the
 // ModuleState.Resources mapping
 type ResourceStateKey struct {
@@ -1121,7 +1364,7 @@ func (rsk *ResourceStateKey) String() string {
 // ModuleState.Resources and returns a resource name and resource index. In the
 // state, a resource has the format "type.name.index" or "type.name". In the
 // latter case, the index is returned as -1.
-func parseResourceStateKey(k string) (*ResourceStateKey, error) {
+func ParseResourceStateKey(k string) (*ResourceStateKey, error) {
 	parts := strings.Split(k, ".")
 	mode := ManagedResourceMode
 	if len(parts) > 0 && parts[0] == "data" {
@@ -1264,6 +1507,24 @@ func (s *ResourceState) Untaint() {
 	}
 }
 
+// ProviderAddr returns the provider address for the receiver, by parsing the
+// string representation saved in state. An error can be returned if the
+// value in state is corrupt.
+func (s *ResourceState) ProviderAddr() (addrs.AbsProviderConfig, error) {
+	var diags tfdiags.Diagnostics
+
+	str := s.Provider
+	traversal, travDiags := hclsyntax.ParseTraversalAbs([]byte(str), "", hcl.Pos{Line: 1, Column: 1})
+	diags = diags.Append(travDiags)
+	if travDiags.HasErrors() {
+		return addrs.AbsProviderConfig{}, diags.Err()
+	}
+
+	addr, addrDiags := addrs.ParseAbsProviderConfig(traversal)
+	diags = diags.Append(addrDiags)
+	return addr, diags.Err()
+}
+
 func (s *ResourceState) init() {
 	s.Lock()
 	defer s.Unlock()
@@ -1340,8 +1601,6 @@ type InstanceState struct {
 	// external client code. The value here must only contain Go primitives
 	// and collections.
 	Meta map[string]interface{} `json:"meta"`
-
-	ProviderMeta cty.Value
 
 	// Tainted is used to mark a resource for recreation.
 	Tainted bool `json:"tainted"`
@@ -1602,6 +1861,283 @@ func (e *EphemeralState) init() {
 	if e.ConnInfo == nil {
 		e.ConnInfo = make(map[string]string)
 	}
+}
+
+func (e *EphemeralState) DeepCopy() *EphemeralState {
+	copy, err := copystructure.Config{Lock: true}.Copy(e)
+	if err != nil {
+		panic(err)
+	}
+
+	return copy.(*EphemeralState)
+}
+
+type jsonStateVersionIdentifier struct {
+	Version int `json:"version"`
+}
+
+// Check if this is a V0 format - the magic bytes at the start of the file
+// should be "tfstate" if so. We no longer support upgrading this type of
+// state but return an error message explaining to a user how they can
+// upgrade via the 0.6.x series.
+func testForV0State(buf *bufio.Reader) error {
+	start, err := buf.Peek(len("tfstate"))
+	if err != nil {
+		return fmt.Errorf("Failed to check for magic bytes: %v", err)
+	}
+	if string(start) == "tfstate" {
+		return fmt.Errorf("Terraform 0.7 no longer supports upgrading the binary state\n" +
+			"format which was used prior to Terraform 0.3. Please upgrade\n" +
+			"this state file using Terraform 0.6.16 prior to using it with\n" +
+			"Terraform 0.7.")
+	}
+
+	return nil
+}
+
+// ErrNoState is returned by ReadState when the io.Reader contains no data
+var ErrNoState = errors.New("no state")
+
+// ReadState reads a state structure out of a reader in the format that
+// was written by WriteState.
+func ReadState(src io.Reader) (*State, error) {
+	// check for a nil file specifically, since that produces a platform
+	// specific error if we try to use it in a bufio.Reader.
+	if f, ok := src.(*os.File); ok && f == nil {
+		return nil, ErrNoState
+	}
+
+	buf := bufio.NewReader(src)
+
+	if _, err := buf.Peek(1); err != nil {
+		if err == io.EOF {
+			return nil, ErrNoState
+		}
+		return nil, err
+	}
+
+	if err := testForV0State(buf); err != nil {
+		return nil, err
+	}
+
+	// If we are JSON we buffer the whole thing in memory so we can read it twice.
+	// This is suboptimal, but will work for now.
+	jsonBytes, err := ioutil.ReadAll(buf)
+	if err != nil {
+		return nil, fmt.Errorf("Reading state file failed: %v", err)
+	}
+
+	versionIdentifier := &jsonStateVersionIdentifier{}
+	if err := json.Unmarshal(jsonBytes, versionIdentifier); err != nil {
+		return nil, fmt.Errorf("Decoding state file version failed: %v", err)
+	}
+
+	var result *State
+	switch versionIdentifier.Version {
+	case 0:
+		return nil, fmt.Errorf("State version 0 is not supported as JSON.")
+	case 1:
+		v1State, err := ReadStateV1(jsonBytes)
+		if err != nil {
+			return nil, err
+		}
+
+		v2State, err := upgradeStateV1ToV2(v1State)
+		if err != nil {
+			return nil, err
+		}
+
+		v3State, err := upgradeStateV2ToV3(v2State)
+		if err != nil {
+			return nil, err
+		}
+
+		// increment the Serial whenever we upgrade state
+		v3State.Serial++
+		result = v3State
+	case 2:
+		v2State, err := ReadStateV2(jsonBytes)
+		if err != nil {
+			return nil, err
+		}
+		v3State, err := upgradeStateV2ToV3(v2State)
+		if err != nil {
+			return nil, err
+		}
+
+		v3State.Serial++
+		result = v3State
+	case 3:
+		v3State, err := ReadStateV3(jsonBytes)
+		if err != nil {
+			return nil, err
+		}
+
+		result = v3State
+	default:
+		return nil, fmt.Errorf("Terraform %s does not support state version %d, please update.",
+			tfversion.SemVer.String(), versionIdentifier.Version)
+	}
+
+	// If we reached this place we must have a result set
+	if result == nil {
+		panic("resulting state in load not set, assertion failed")
+	}
+
+	// Prune the state when read it. Its possible to write unpruned states or
+	// for a user to make a state unpruned (nil-ing a module state for example).
+	result.prune()
+
+	// Validate the state file is valid
+	if err := result.Validate(); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+func ReadStateV1(jsonBytes []byte) (*stateV1, error) {
+	v1State := &stateV1{}
+	if err := json.Unmarshal(jsonBytes, v1State); err != nil {
+		return nil, fmt.Errorf("Decoding state file failed: %v", err)
+	}
+
+	if v1State.Version != 1 {
+		return nil, fmt.Errorf("Decoded state version did not match the decoder selection: "+
+			"read %d, expected 1", v1State.Version)
+	}
+
+	return v1State, nil
+}
+
+func ReadStateV2(jsonBytes []byte) (*State, error) {
+	state := &State{}
+	if err := json.Unmarshal(jsonBytes, state); err != nil {
+		return nil, fmt.Errorf("Decoding state file failed: %v", err)
+	}
+
+	// Check the version, this to ensure we don't read a future
+	// version that we don't understand
+	if state.Version > StateVersion {
+		return nil, fmt.Errorf("Terraform %s does not support state version %d, please update.",
+			tfversion.SemVer.String(), state.Version)
+	}
+
+	// Make sure the version is semantic
+	if state.TFVersion != "" {
+		if _, err := version.NewVersion(state.TFVersion); err != nil {
+			return nil, fmt.Errorf(
+				"State contains invalid version: %s\n\n"+
+					"Terraform validates the version format prior to writing it. This\n"+
+					"means that this is invalid of the state becoming corrupted through\n"+
+					"some external means. Please manually modify the Terraform version\n"+
+					"field to be a proper semantic version.",
+				state.TFVersion)
+		}
+	}
+
+	// catch any unitialized fields in the state
+	state.init()
+
+	// Sort it
+	state.sort()
+
+	return state, nil
+}
+
+func ReadStateV3(jsonBytes []byte) (*State, error) {
+	state := &State{}
+	if err := json.Unmarshal(jsonBytes, state); err != nil {
+		return nil, fmt.Errorf("Decoding state file failed: %v", err)
+	}
+
+	// Check the version, this to ensure we don't read a future
+	// version that we don't understand
+	if state.Version > StateVersion {
+		return nil, fmt.Errorf("Terraform %s does not support state version %d, please update.",
+			tfversion.SemVer.String(), state.Version)
+	}
+
+	// Make sure the version is semantic
+	if state.TFVersion != "" {
+		if _, err := version.NewVersion(state.TFVersion); err != nil {
+			return nil, fmt.Errorf(
+				"State contains invalid version: %s\n\n"+
+					"Terraform validates the version format prior to writing it. This\n"+
+					"means that this is invalid of the state becoming corrupted through\n"+
+					"some external means. Please manually modify the Terraform version\n"+
+					"field to be a proper semantic version.",
+				state.TFVersion)
+		}
+	}
+
+	// catch any unitialized fields in the state
+	state.init()
+
+	// Sort it
+	state.sort()
+
+	// Now we write the state back out to detect any changes in normaliztion.
+	// If our state is now written out differently, bump the serial number to
+	// prevent conflicts.
+	var buf bytes.Buffer
+	err := WriteState(state, &buf)
+	if err != nil {
+		return nil, err
+	}
+
+	if !bytes.Equal(jsonBytes, buf.Bytes()) {
+		log.Println("[INFO] state modified during read or write. incrementing serial number")
+		state.Serial++
+	}
+
+	return state, nil
+}
+
+// WriteState writes a state somewhere in a binary format.
+func WriteState(d *State, dst io.Writer) error {
+	// writing a nil state is a noop.
+	if d == nil {
+		return nil
+	}
+
+	// make sure we have no uninitialized fields
+	d.init()
+
+	// Make sure it is sorted
+	d.sort()
+
+	// Ensure the version is set
+	d.Version = StateVersion
+
+	// If the TFVersion is set, verify it. We used to just set the version
+	// here, but this isn't safe since it changes the MD5 sum on some remote
+	// state storage backends such as Atlas. We now leave it be if needed.
+	if d.TFVersion != "" {
+		if _, err := version.NewVersion(d.TFVersion); err != nil {
+			return fmt.Errorf(
+				"Error writing state, invalid version: %s\n\n"+
+					"The Terraform version when writing the state must be a semantic\n"+
+					"version.",
+				d.TFVersion)
+		}
+	}
+
+	// Encode the data in a human-friendly way
+	data, err := json.MarshalIndent(d, "", "    ")
+	if err != nil {
+		return fmt.Errorf("Failed to encode state: %s", err)
+	}
+
+	// We append a newline to the data because MarshalIndent doesn't
+	data = append(data, '\n')
+
+	// Write the data out to the dst
+	if _, err := io.Copy(dst, bytes.NewReader(data)); err != nil {
+		return fmt.Errorf("Failed to write state: %v", err)
+	}
+
+	return nil
 }
 
 // resourceNameSort implements the sort.Interface to sort name parts lexically for

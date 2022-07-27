@@ -5,8 +5,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/hashicorp/go-cty/cty"
-	"github.com/hashicorp/go-cty/cty/convert"
+	"github.com/zclconf/go-cty/cty/convert"
+
+	"github.com/zclconf/go-cty/cty"
 )
 
 // FlatmapValueFromHCL2 converts a value from HCL2 (really, from the cty dynamic

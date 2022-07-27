@@ -1,17 +1,15 @@
 package resource
 
 import (
-	"errors"
 	"fmt"
+	"testing"
 
 	tfjson "github.com/hashicorp/terraform-json"
-	testing "github.com/mitchellh/go-testing-interface"
-
-	"github.com/hashicorp/terraform-plugin-sdk/v2/internal/plugintest"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
+	"github.com/hashicorp/terraform-plugin-sdk/terraform"
+	tftest "github.com/hashicorp/terraform-plugin-test/v2"
 )
 
-func testStepNewConfig(t testing.T, c TestCase, wd *plugintest.WorkingDir, step TestStep) error {
+func testStepNewConfig(t *testing.T, c TestCase, wd *tftest.WorkingDir, step TestStep) error {
 	t.Helper()
 
 	var idRefreshCheck *terraform.ResourceState
@@ -19,16 +17,12 @@ func testStepNewConfig(t testing.T, c TestCase, wd *plugintest.WorkingDir, step 
 
 	if !step.Destroy {
 		var state *terraform.State
-		var err error
-		err = runProviderCommand(t, func() error {
-			state, err = getState(t, wd)
-			if err != nil {
-				return err
-			}
+		err := runProviderCommand(t, func() error {
+			state = getState(t, wd)
 			return nil
-		}, wd, c.ProviderFactories, c.ProtoV5ProviderFactories)
+		}, wd, c.ProviderFactories)
 		if err != nil {
-			return err
+			return fmt.Errorf("Error retrieving state: %v", err)
 		}
 		if err := testStepTaint(state, step); err != nil {
 			return fmt.Errorf("Error when tainting resources: %s", err)
@@ -37,16 +31,16 @@ func testStepNewConfig(t testing.T, c TestCase, wd *plugintest.WorkingDir, step 
 
 	err := wd.SetConfig(step.Config)
 	if err != nil {
-		return fmt.Errorf("Error setting config: %w", err)
+		return fmt.Errorf("Error setting config: %s", err)
 	}
 
 	// require a refresh before applying
 	// failing to do this will result in data sources not being updated
 	err = runProviderCommand(t, func() error {
 		return wd.Refresh()
-	}, wd, c.ProviderFactories, c.ProtoV5ProviderFactories)
+	}, wd, c.ProviderFactories)
 	if err != nil {
-		return fmt.Errorf("Error running pre-apply refresh: %w", err)
+		return fmt.Errorf("Error running pre-apply refresh: %v", err)
 	}
 
 	// If this step is a PlanOnly step, skip over this first Plan and
@@ -54,14 +48,14 @@ func testStepNewConfig(t testing.T, c TestCase, wd *plugintest.WorkingDir, step 
 	// permadiffs
 	if !step.PlanOnly {
 		// Plan!
-		err := runProviderCommand(t, func() error {
+		err = runProviderCommand(t, func() error {
 			if step.Destroy {
 				return wd.CreateDestroyPlan()
 			}
 			return wd.CreatePlan()
-		}, wd, c.ProviderFactories, c.ProtoV5ProviderFactories)
+		}, wd, c.ProviderFactories)
 		if err != nil {
-			return fmt.Errorf("Error running pre-apply plan: %w", err)
+			return fmt.Errorf("Error running pre-apply plan: %s", err)
 		}
 
 		// We need to keep a copy of the state prior to destroying such
@@ -69,50 +63,41 @@ func testStepNewConfig(t testing.T, c TestCase, wd *plugintest.WorkingDir, step 
 		// check function
 		var stateBeforeApplication *terraform.State
 		err = runProviderCommand(t, func() error {
-			stateBeforeApplication, err = getState(t, wd)
-			if err != nil {
-				return err
-			}
+			stateBeforeApplication = getState(t, wd)
 			return nil
-		}, wd, c.ProviderFactories, c.ProtoV5ProviderFactories)
+		}, wd, c.ProviderFactories)
 		if err != nil {
-			return fmt.Errorf("Error retrieving pre-apply state: %w", err)
+			return fmt.Errorf("Error retrieving pre-apply state: %s", err)
 		}
 
 		// Apply the diff, creating real resources
 		err = runProviderCommand(t, func() error {
 			return wd.Apply()
-		}, wd, c.ProviderFactories, c.ProtoV5ProviderFactories)
+		}, wd, c.ProviderFactories)
 		if err != nil {
 			if step.Destroy {
-				return fmt.Errorf("Error running destroy: %w", err)
+				return fmt.Errorf("Error running destroy: %s", err)
 			}
-			return fmt.Errorf("Error running apply: %w", err)
+			return fmt.Errorf("Error running apply: %s", err)
 		}
 
-		// Get the new state
 		var state *terraform.State
 		err = runProviderCommand(t, func() error {
-			state, err = getState(t, wd)
-			if err != nil {
-				return err
-			}
+			state = getState(t, wd)
 			return nil
-		}, wd, c.ProviderFactories, c.ProtoV5ProviderFactories)
+		}, wd, c.ProviderFactories)
 		if err != nil {
-			return fmt.Errorf("Error retrieving state after apply: %w", err)
+			return fmt.Errorf("error retrieving state after apply: %v", err)
 		}
-
-		// Run any configured checks
 		if step.Check != nil {
 			state.IsBinaryDrivenTest = true
 			if step.Destroy {
 				if err := step.Check(stateBeforeApplication); err != nil {
-					return fmt.Errorf("Check failed: %w", err)
+					return fmt.Errorf("Check failed: %s", err)
 				}
 			} else {
 				if err := step.Check(state); err != nil {
-					return fmt.Errorf("Check failed: %w", err)
+					return fmt.Errorf("Check failed: %s", err)
 				}
 			}
 		}
@@ -126,9 +111,9 @@ func testStepNewConfig(t testing.T, c TestCase, wd *plugintest.WorkingDir, step 
 			return wd.CreateDestroyPlan()
 		}
 		return wd.CreatePlan()
-	}, wd, c.ProviderFactories, c.ProtoV5ProviderFactories)
+	}, wd, c.ProviderFactories)
 	if err != nil {
-		return fmt.Errorf("Error running post-apply plan: %w", err)
+		return fmt.Errorf("Error running post-apply plan: %s", err)
 	}
 
 	var plan *tfjson.Plan
@@ -136,20 +121,20 @@ func testStepNewConfig(t testing.T, c TestCase, wd *plugintest.WorkingDir, step 
 		var err error
 		plan, err = wd.SavedPlan()
 		return err
-	}, wd, c.ProviderFactories, c.ProtoV5ProviderFactories)
+	}, wd, c.ProviderFactories)
 	if err != nil {
-		return fmt.Errorf("Error retrieving post-apply plan: %w", err)
+		return fmt.Errorf("Error retrieving post-apply plan: %s", err)
 	}
 
 	if !planIsEmpty(plan) && !step.ExpectNonEmptyPlan {
 		var stdout string
 		err = runProviderCommand(t, func() error {
 			var err error
-			stdout, err = wd.SavedPlanRawStdout()
+			stdout, err = wd.SavedPlanStdout()
 			return err
-		}, wd, c.ProviderFactories, c.ProtoV5ProviderFactories)
+		}, wd, c.ProviderFactories)
 		if err != nil {
-			return fmt.Errorf("Error retrieving formatted plan output: %w", err)
+			return fmt.Errorf("Error retrieving formatted plan output: %s", err)
 		}
 		return fmt.Errorf("After applying this test step, the plan was not empty.\nstdout:\n\n%s", stdout)
 	}
@@ -158,9 +143,9 @@ func testStepNewConfig(t testing.T, c TestCase, wd *plugintest.WorkingDir, step 
 	if !step.Destroy || (step.Destroy && !step.PreventPostDestroyRefresh) {
 		err := runProviderCommand(t, func() error {
 			return wd.Refresh()
-		}, wd, c.ProviderFactories, c.ProtoV5ProviderFactories)
+		}, wd, c.ProviderFactories)
 		if err != nil {
-			return fmt.Errorf("Error running post-apply refresh: %w", err)
+			return fmt.Errorf("Error running post-apply refresh: %s", err)
 		}
 	}
 
@@ -170,18 +155,18 @@ func testStepNewConfig(t testing.T, c TestCase, wd *plugintest.WorkingDir, step 
 			return wd.CreateDestroyPlan()
 		}
 		return wd.CreatePlan()
-	}, wd, c.ProviderFactories, c.ProtoV5ProviderFactories)
+	}, wd, c.ProviderFactories)
 	if err != nil {
-		return fmt.Errorf("Error running second post-apply plan: %w", err)
+		return fmt.Errorf("Error running second post-apply plan: %s", err)
 	}
 
 	err = runProviderCommand(t, func() error {
 		var err error
 		plan, err = wd.SavedPlan()
 		return err
-	}, wd, c.ProviderFactories, c.ProtoV5ProviderFactories)
+	}, wd, c.ProviderFactories)
 	if err != nil {
-		return fmt.Errorf("Error retrieving second post-apply plan: %w", err)
+		return fmt.Errorf("Error retrieving second post-apply plan: %s", err)
 	}
 
 	// check if plan is empty
@@ -189,15 +174,15 @@ func testStepNewConfig(t testing.T, c TestCase, wd *plugintest.WorkingDir, step 
 		var stdout string
 		err = runProviderCommand(t, func() error {
 			var err error
-			stdout, err = wd.SavedPlanRawStdout()
+			stdout, err = wd.SavedPlanStdout()
 			return err
-		}, wd, c.ProviderFactories, c.ProtoV5ProviderFactories)
+		}, wd, c.ProviderFactories)
 		if err != nil {
-			return fmt.Errorf("Error retrieving formatted second plan output: %w", err)
+			return fmt.Errorf("Error retrieving formatted second plan output: %s", err)
 		}
 		return fmt.Errorf("After applying this test step and performing a `terraform refresh`, the plan was not empty.\nstdout\n\n%s", stdout)
 	} else if step.ExpectNonEmptyPlan && planIsEmpty(plan) {
-		return errors.New("Expected a non-empty plan, but got an empty plan")
+		return fmt.Errorf("Expected a non-empty plan, but got an empty plan!")
 	}
 
 	// ID-ONLY REFRESH
@@ -205,12 +190,9 @@ func testStepNewConfig(t testing.T, c TestCase, wd *plugintest.WorkingDir, step 
 	// empty, find the first resource and test it.
 	var state *terraform.State
 	err = runProviderCommand(t, func() error {
-		state, err = getState(t, wd)
-		if err != nil {
-			return err
-		}
+		state = getState(t, wd)
 		return nil
-	}, wd, c.ProviderFactories, c.ProtoV5ProviderFactories)
+	}, wd, c.ProviderFactories)
 	if err != nil {
 		return err
 	}

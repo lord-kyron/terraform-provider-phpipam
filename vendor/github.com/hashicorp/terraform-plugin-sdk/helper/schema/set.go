@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/internal/helper/hashcode"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/hashcode"
 )
 
 // HashString hashes strings. If you want a Set of strings, this is the
@@ -231,13 +231,16 @@ func (s *Set) add(item interface{}, computed bool) string {
 	code := s.hash(item)
 	if computed {
 		code = "~" + code
-		tmpCode := code
-		count := 0
-		for _, exists := s.m[tmpCode]; exists; _, exists = s.m[tmpCode] {
-			count++
-			tmpCode = fmt.Sprintf("%s%d", code, count)
+
+		if isProto5() {
+			tmpCode := code
+			count := 0
+			for _, exists := s.m[tmpCode]; exists; _, exists = s.m[tmpCode] {
+				count++
+				tmpCode = fmt.Sprintf("%s%d", code, count)
+			}
+			code = tmpCode
 		}
-		code = tmpCode
 	}
 
 	if _, ok := s.m[code]; !ok {

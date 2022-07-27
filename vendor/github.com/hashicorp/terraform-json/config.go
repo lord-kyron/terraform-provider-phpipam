@@ -147,9 +147,6 @@ type ConfigVariable struct {
 
 	// The defined text description of the variable.
 	Description string `json:"description,omitempty"`
-
-	// Whether the variable is marked as sensitive
-	Sensitive bool `json:"sensitive,omitempty"`
 }
 
 // ConfigProvisioner describes a provisioner declared in a resource
@@ -184,8 +181,4 @@ type ModuleCall struct {
 
 	// The version constraint for modules that come from the registry.
 	VersionConstraint string `json:"version_constraint,omitempty"`
-
-	// The explicit resource dependencies for the "depends_on" value.
-	// As it must be a slice of references, Expression is not used.
-	DependsOn []string `json:"depends_on,omitempty"`
 }

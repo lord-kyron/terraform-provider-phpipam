@@ -1,14 +1,13 @@
 package objchange
 
 import (
-	"github.com/hashicorp/go-cty/cty"
-
-	"github.com/hashicorp/terraform-plugin-sdk/v2/internal/configs/configschema"
+	"github.com/hashicorp/terraform-plugin-sdk/internal/configs/configschema"
+	"github.com/zclconf/go-cty/cty"
 )
 
 // NormalizeObjectFromLegacySDK takes an object that may have been generated
 // by the legacy Terraform SDK (i.e. returned from a provider with the
-// UnsafeToUseLegacyTypeSystem opt-out set) and does its best to normalize it for the
+// LegacyTypeSystem opt-out set) and does its best to normalize it for the
 // assumptions we would normally enforce if the provider had not opted out.
 //
 // In particular, this function guarantees that a value representing a nested

@@ -1,18 +1,13 @@
 package resource
 
 import (
-	"context"
-	"errors"
 	"sync"
 	"time"
 )
 
-// RetryContext is a basic wrapper around StateChangeConf that will just retry
+// Retry is a basic wrapper around StateChangeConf that will just retry
 // a function until it no longer returns an error.
-//
-// Cancellation from the passed in context will propagate through to the
-// underlying StateChangeConf
-func RetryContext(ctx context.Context, timeout time.Duration, f RetryFunc) error {
+func Retry(timeout time.Duration, f RetryFunc) error {
 	// These are used to pull the error out of the function; need a mutex to
 	// avoid a data race.
 	var resultErr error
@@ -43,7 +38,7 @@ func RetryContext(ctx context.Context, timeout time.Duration, f RetryFunc) error
 		},
 	}
 
-	_, waitErr := c.WaitForStateContext(ctx)
+	_, waitErr := c.WaitForState()
 
 	// Need to acquire the lock here to be able to avoid race using resultErr as
 	// the return value
@@ -60,14 +55,6 @@ func RetryContext(ctx context.Context, timeout time.Duration, f RetryFunc) error
 	return resultErr
 }
 
-// Retry is a basic wrapper around StateChangeConf that will just retry
-// a function until it no longer returns an error.
-//
-// Deprecated: Please use RetryContext to ensure proper plugin shutdown
-func Retry(timeout time.Duration, f RetryFunc) error {
-	return RetryContext(context.Background(), timeout, f)
-}
-
 // RetryFunc is the function retried until it succeeds.
 type RetryFunc func() *RetryError
 
@@ -78,36 +65,20 @@ type RetryError struct {
 	Retryable bool
 }
 
-func (e *RetryError) Unwrap() error {
-	return e.Err
-}
-
 // RetryableError is a helper to create a RetryError that's retryable from a
-// given error. To prevent logic errors, will return an error when passed a
-// nil error.
+// given error.
 func RetryableError(err error) *RetryError {
 	if err == nil {
-		return &RetryError{
-			Err: errors.New("empty retryable error received. " +
-				"This is a bug with the Terraform provider and should be " +
-				"reported as a GitHub issue in the provider repository."),
-			Retryable: false,
-		}
+		return nil
 	}
 	return &RetryError{Err: err, Retryable: true}
 }
 
 // NonRetryableError is a helper to create a RetryError that's _not_ retryable
-// from a given error. To prevent logic errors, will return an error when
-// passed a nil error.
+// from a given error.
 func NonRetryableError(err error) *RetryError {
 	if err == nil {
-		return &RetryError{
-			Err: errors.New("empty non-retryable error received. " +
-				"This is a bug with the Terraform provider and should be " +
-				"reported as a GitHub issue in the provider repository."),
-			Retryable: false,
-		}
+		return nil
 	}
 	return &RetryError{Err: err, Retryable: false}
 }

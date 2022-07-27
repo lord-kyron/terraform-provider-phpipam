@@ -1,24 +1,38 @@
 package resource
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"log"
 	"os"
+	"path/filepath"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
+	"testing"
 
+	"github.com/davecgh/go-spew/spew"
+	"github.com/hashicorp/errwrap"
 	"github.com/hashicorp/go-multierror"
-	testing "github.com/mitchellh/go-testing-interface"
-
-	"github.com/hashicorp/terraform-plugin-go/tfprotov5"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/logging"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/internal/addrs"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/internal/plugintest"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
+	"github.com/hashicorp/logutils"
+	"github.com/hashicorp/terraform-plugin-sdk/acctest"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/logging"
+	"github.com/hashicorp/terraform-plugin-sdk/internal/addrs"
+	"github.com/hashicorp/terraform-plugin-sdk/internal/command/format"
+	"github.com/hashicorp/terraform-plugin-sdk/internal/configs"
+	"github.com/hashicorp/terraform-plugin-sdk/internal/configs/configload"
+	"github.com/hashicorp/terraform-plugin-sdk/internal/initwd"
+	"github.com/hashicorp/terraform-plugin-sdk/internal/providers"
+	"github.com/hashicorp/terraform-plugin-sdk/internal/states"
+	"github.com/hashicorp/terraform-plugin-sdk/internal/tfdiags"
+	"github.com/hashicorp/terraform-plugin-sdk/terraform"
+	"github.com/mitchellh/colorstring"
 )
 
 // flagSweep is a flag available when running tests on the command line. It
@@ -82,9 +96,7 @@ func AddTestSweepers(name string, s *Sweeper) {
 	sweeperFuncs[name] = s
 }
 
-func TestMain(m interface {
-	Run() int
-}) {
+func TestMain(m *testing.M) {
 	flag.Parse()
 	if *flagSweep != "" {
 		// parse flagSweep contents for regions to run
@@ -98,6 +110,13 @@ func TestMain(m interface {
 		}
 	} else {
 		exitCode := m.Run()
+
+		if acctest.TestHelper != nil {
+			err := acctest.TestHelper.Close()
+			if err != nil {
+				log.Printf("Error cleaning up temporary test files: %s", err)
+			}
+		}
 		os.Exit(exitCode)
 	}
 }
@@ -206,22 +225,20 @@ func filterSweeperWithDependencies(name string, source map[string]*Sweeper) map[
 // add the success/fail status to the sweeperRunList.
 func runSweeperWithRegion(region string, s *Sweeper, sweepers map[string]*Sweeper, sweeperRunList map[string]error, allowFailures bool) error {
 	for _, dep := range s.Dependencies {
-		depSweeper, ok := sweepers[dep]
+		if depSweeper, ok := sweepers[dep]; ok {
+			log.Printf("[DEBUG] Sweeper (%s) has dependency (%s), running..", s.Name, dep)
+			err := runSweeperWithRegion(region, depSweeper, sweepers, sweeperRunList, allowFailures)
 
-		if !ok {
-			return fmt.Errorf("sweeper (%s) has dependency (%s), but that sweeper was not found", s.Name, dep)
-		}
+			if err != nil {
+				if allowFailures {
+					log.Printf("[ERROR] Error running Sweeper (%s) in region (%s): %s", depSweeper.Name, region, err)
+					continue
+				}
 
-		log.Printf("[DEBUG] Sweeper (%s) has dependency (%s), running..", s.Name, dep)
-		err := runSweeperWithRegion(region, depSweeper, sweepers, sweeperRunList, allowFailures)
-
-		if err != nil {
-			if allowFailures {
-				log.Printf("[ERROR] Error running Sweeper (%s) in region (%s): %s", depSweeper.Name, region, err)
-				continue
+				return err
 			}
-
-			return err
+		} else {
+			log.Printf("[WARN] Sweeper (%s) has dependency (%s), but that sweeper was not found", s.Name, dep)
 		}
 	}
 
@@ -244,6 +261,14 @@ func runSweeperWithRegion(region string, s *Sweeper, sweepers map[string]*Sweepe
 }
 
 const TestEnvVar = "TF_ACC"
+const TestDisableBinaryTestingFlagEnvVar = "TF_DISABLE_BINARY_TESTING"
+
+// TestProvider can be implemented by any ResourceProvider to provide custom
+// reset functionality at the start of an acceptance test.
+// The helper/schema Provider implements this interface.
+type TestProvider interface {
+	TestReset() error
+}
 
 // TestCheckFunc is the callback type used with acceptance tests to check
 // the state of a resource. The state passed in is the latest state known,
@@ -257,9 +282,6 @@ type ImportStateCheckFunc func([]*terraform.InstanceState) error
 // ImportStateIdFunc is an ID generation function to help with complex ID
 // generation for ImportState tests.
 type ImportStateIdFunc func(*terraform.State) (string, error)
-
-// ErrorCheckFunc is a function providers can use to handle errors.
-type ErrorCheckFunc func(error) error
 
 // TestCase is a single acceptance test case used to test the apply/destroy
 // lifecycle of a resource in a specific configuration.
@@ -280,42 +302,25 @@ type TestCase struct {
 	// acceptance tests, such as verifying that keys are setup.
 	PreCheck func()
 
-	// ProviderFactories can be specified for the providers that are valid.
-	//
-	// These are the providers that can be referenced within the test. Each key
-	// is an individually addressable provider. Typically you will only pass a
-	// single value here for the provider you are testing. Aliases are not
-	// supported by the test framework, so to use multiple provider instances,
-	// you should add additional copies to this map with unique names. To set
-	// their configuration, you would reference them similar to the following:
-	//
-	//  provider "my_factory_key" {
-	//    # ...
-	//  }
-	//
-	//  resource "my_resource" "mr" {
-	//    provider = my_factory_key
-	//
-	//    # ...
-	//  }
-	ProviderFactories map[string]func() (*schema.Provider, error)
-
-	// ProtoV5ProviderFactories serves the same purpose as ProviderFactories,
-	// but for protocol v5 providers defined using the terraform-plugin-go
-	// ProviderServer interface.
-	ProtoV5ProviderFactories map[string]func() (tfprotov5.ProviderServer, error)
-
 	// Providers is the ResourceProvider that will be under test.
 	//
-	// Deprecated: Providers is deprecated, please use ProviderFactories
-	Providers map[string]*schema.Provider
+	// Alternately, ProviderFactories can be specified for the providers
+	// that are valid. This takes priority over Providers.
+	//
+	// The end effect of each is the same: specifying the providers that
+	// are used within the tests.
+	Providers         map[string]terraform.ResourceProvider
+	ProviderFactories map[string]terraform.ResourceProviderFactory
 
 	// ExternalProviders are providers the TestCase relies on that should
 	// be downloaded from the registry during init. This is only really
 	// necessary to set if you're using import, as providers in your config
-	// will be automatically retrieved during init. Import doesn't use a
-	// config, however, so we allow manually specifying them here to be
-	// downloaded for import tests.
+	// will be automatically retrieved during init. Import doesn't always
+	// use a config, however, so we allow manually specifying them here to
+	// be downloaded for import tests.
+	//
+	// ExternalProviders will only be used when using binary acceptance
+	// testing in reattach mode.
 	ExternalProviders map[string]ExternalProvider
 
 	// PreventPostDestroyRefresh can be set to true for cases where data sources
@@ -325,10 +330,6 @@ type TestCase struct {
 	// CheckDestroy is called after the resource is finally destroyed
 	// to allow the tester to test that the resource is truly gone.
 	CheckDestroy TestCheckFunc
-
-	// ErrorCheck allows providers the option to handle errors such as skipping
-	// tests based on certain errors.
-	ErrorCheck ErrorCheckFunc
 
 	// Steps are the apply sequences done within the context of the
 	// same state. Each step can have its own check to verify correctness.
@@ -345,6 +346,12 @@ type TestCase struct {
 	// IDRefreshIgnore is a list of configuration keys that will be ignored.
 	IDRefreshName   string
 	IDRefreshIgnore []string
+
+	// DisableBinaryDriver forces this test case to run using the legacy test
+	// driver, even if the binary test driver has been enabled.
+	//
+	// Deprecated: This property will be removed in version 2.0.0 of the SDK.
+	DisableBinaryDriver bool
 }
 
 // ExternalProvider holds information about third-party providers that should
@@ -482,6 +489,53 @@ type TestStep struct {
 	// fields that can't be refreshed and don't matter.
 	ImportStateVerify       bool
 	ImportStateVerifyIgnore []string
+
+	// provider s is used internally to maintain a reference to the
+	// underlying providers during the tests
+	providers map[string]terraform.ResourceProvider
+}
+
+// Set to a file mask in sprintf format where %s is test name
+const EnvLogPathMask = "TF_LOG_PATH_MASK"
+
+func LogOutput(t TestT) (logOutput io.Writer, err error) {
+	logOutput = ioutil.Discard
+
+	logLevel := logging.LogLevel()
+	if logLevel == "" {
+		return
+	}
+
+	logOutput = os.Stderr
+
+	if logPath := os.Getenv(logging.EnvLogFile); logPath != "" {
+		var err error
+		logOutput, err = os.OpenFile(logPath, syscall.O_CREAT|syscall.O_RDWR|syscall.O_APPEND, 0666)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if logPathMask := os.Getenv(EnvLogPathMask); logPathMask != "" {
+		// Escape special characters which may appear if we have subtests
+		testName := strings.Replace(t.Name(), "/", "__", -1)
+
+		logPath := fmt.Sprintf(logPathMask, testName)
+		var err error
+		logOutput, err = os.OpenFile(logPath, syscall.O_CREAT|syscall.O_RDWR|syscall.O_APPEND, 0666)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// This was the default since the beginning
+	logOutput = &logutils.LevelFilter{
+		Levels:   logging.ValidLevels,
+		MinLevel: logutils.LogLevel(logLevel),
+		Writer:   logOutput,
+	}
+
+	return
 }
 
 // ParallelTest performs an acceptance test on a resource, allowing concurrency
@@ -490,8 +544,7 @@ type TestStep struct {
 // Tests will fail if they do not properly handle conditions to allow multiple
 // tests to occur against the same resource or service (e.g. random naming).
 // All other requirements of the Test function also apply to this function.
-func ParallelTest(t testing.T, c TestCase) {
-	t.Helper()
+func ParallelTest(t TestT, c TestCase) {
 	t.Parallel()
 	Test(t, c)
 }
@@ -506,9 +559,7 @@ func ParallelTest(t testing.T, c TestCase) {
 // the "-test.v" flag) is set. Because some acceptance tests take quite
 // long, we require the verbose flag so users are able to see progress
 // output.
-func Test(t testing.T, c TestCase) {
-	t.Helper()
-
+func Test(t TestT, c TestCase) {
 	// We only run acceptance tests if an env var is set because they're
 	// slow and generally require some outside configuration. You can opt out
 	// of this with OverrideEnvVar on individual TestCases.
@@ -518,44 +569,210 @@ func Test(t testing.T, c TestCase) {
 			TestEnvVar))
 		return
 	}
-
-	logging.SetOutput(t)
-
-	// Copy any explicitly passed providers to factories, this is for backwards compatibility.
-	if len(c.Providers) > 0 {
-		c.ProviderFactories = map[string]func() (*schema.Provider, error){}
-
-		for name, p := range c.Providers {
-			if _, ok := c.ProviderFactories[name]; ok {
-				t.Fatalf("ProviderFactory for %q already exists, cannot overwrite with Provider", name)
-			}
-			prov := p
-			c.ProviderFactories[name] = func() (*schema.Provider, error) {
-				return prov, nil
-			}
-		}
-	}
-
-	// Run the PreCheck if we have it.
-	// This is done after the auto-configure to allow providers
-	// to override the default auto-configure parameters.
-	if c.PreCheck != nil {
-		c.PreCheck()
-	}
-
-	sourceDir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Error getting working dir: %s", err)
-	}
-	helper := plugintest.AutoInitProviderHelper(sourceDir)
-	defer func(helper *plugintest.Helper) {
-		err := helper.Close()
+	if v := os.Getenv(TestDisableBinaryTestingFlagEnvVar); v != "" {
+		b, err := strconv.ParseBool(v)
 		if err != nil {
-			log.Printf("Error cleaning up temporary test files: %s", err)
+			t.Error(fmt.Errorf("Error parsing EnvVar %q value %q: %s", TestDisableBinaryTestingFlagEnvVar, v, err))
 		}
-	}(helper)
 
-	runNewTest(t, c, helper)
+		c.DisableBinaryDriver = b
+	}
+
+	logWriter, err := LogOutput(t)
+	if err != nil {
+		t.Error(fmt.Errorf("error setting up logging: %s", err))
+	}
+	log.SetOutput(logWriter)
+
+	// We require verbose mode so that the user knows what is going on.
+	if !testTesting && !testing.Verbose() && !c.IsUnitTest {
+		t.Fatal("Acceptance tests must be run with the -v flag on tests")
+	}
+
+	// get instances of all providers, so we can use the individual
+	// resources to shim the state during the tests.
+	providers := make(map[string]terraform.ResourceProvider)
+	for name, pf := range testProviderFactories(c) {
+		p, err := pf()
+		if err != nil {
+			t.Fatal(err)
+		}
+		providers[name] = p
+	}
+
+	if acctest.TestHelper != nil && c.DisableBinaryDriver == false {
+		// auto-configure all providers
+		for _, p := range providers {
+			err = p.Configure(terraform.NewResourceConfigRaw(nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		// Run the PreCheck if we have it.
+		// This is done after the auto-configure to allow providers
+		// to override the default auto-configure parameters.
+		if c.PreCheck != nil {
+			c.PreCheck()
+		}
+
+		// inject providers for ImportStateVerify
+		RunNewTest(t.(*testing.T), c, providers)
+		return
+	} else {
+		// run the PreCheck if we have it
+		if c.PreCheck != nil {
+			c.PreCheck()
+		}
+	}
+
+	providerResolver, err := testProviderResolver(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	opts := terraform.ContextOpts{ProviderResolver: providerResolver}
+
+	// A single state variable to track the lifecycle, starting with no state
+	var state *terraform.State
+
+	// Go through each step and run it
+	var idRefreshCheck *terraform.ResourceState
+	idRefresh := c.IDRefreshName != ""
+	errored := false
+	for i, step := range c.Steps {
+		// insert the providers into the step so we can get the resources for
+		// shimming the state
+		step.providers = providers
+
+		var err error
+		log.Printf("[DEBUG] Test: Executing step %d", i)
+
+		if step.SkipFunc != nil {
+			skip, err := step.SkipFunc()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if skip {
+				log.Printf("[WARN] Skipping step %d", i)
+				continue
+			}
+		}
+
+		if step.Config == "" && !step.ImportState {
+			err = fmt.Errorf(
+				"unknown test mode for step. Please see TestStep docs\n\n%#v",
+				step)
+		} else {
+			if step.ImportState {
+				if step.Config == "" {
+					step.Config, err = testProviderConfig(c)
+					if err != nil {
+						t.Fatal("Error setting config for providers: " + err.Error())
+					}
+				}
+
+				// Can optionally set step.Config in addition to
+				// step.ImportState, to provide config for the import.
+				state, err = testStepImportState(opts, state, step)
+			} else {
+				state, err = testStepConfig(opts, state, step)
+			}
+		}
+
+		// If we expected an error, but did not get one, fail
+		if err == nil && step.ExpectError != nil {
+			errored = true
+			t.Error(fmt.Sprintf(
+				"Step %d, no error received, but expected a match to:\n\n%s\n\n",
+				i, step.ExpectError))
+			break
+		}
+
+		// If there was an error, exit
+		if err != nil {
+			// Perhaps we expected an error? Check if it matches
+			if step.ExpectError != nil {
+				if !step.ExpectError.MatchString(err.Error()) {
+					errored = true
+					t.Error(fmt.Sprintf(
+						"Step %d, expected error:\n\n%s\n\nTo match:\n\n%s\n\n",
+						i, err, step.ExpectError))
+					break
+				}
+			} else {
+				errored = true
+				t.Error(fmt.Sprintf("Step %d error: %s", i, detailedErrorMessage(err)))
+				break
+			}
+		}
+
+		// If we've never checked an id-only refresh and our state isn't
+		// empty, find the first resource and test it.
+		if idRefresh && idRefreshCheck == nil && !state.Empty() {
+			// Find the first non-nil resource in the state
+			for _, m := range state.Modules {
+				if len(m.Resources) > 0 {
+					if v, ok := m.Resources[c.IDRefreshName]; ok {
+						idRefreshCheck = v
+					}
+
+					break
+				}
+			}
+
+			// If we have an instance to check for refreshes, do it
+			// immediately. We do it in the middle of another test
+			// because it shouldn't affect the overall state (refresh
+			// is read-only semantically) and we want to fail early if
+			// this fails. If refresh isn't read-only, then this will have
+			// caught a different bug.
+			if idRefreshCheck != nil {
+				log.Printf(
+					"[WARN] Test: Running ID-only refresh check on %s",
+					idRefreshCheck.Primary.ID)
+				if err := testIDOnlyRefresh(c, opts, step, idRefreshCheck); err != nil {
+					log.Printf("[ERROR] Test: ID-only test failed: %s", err)
+					t.Error(fmt.Sprintf(
+						"[ERROR] Test: ID-only test failed: %s", err))
+					break
+				}
+			}
+		}
+	}
+
+	// If we never checked an id-only refresh, it is a failure.
+	if idRefresh {
+		if !errored && len(c.Steps) > 0 && idRefreshCheck == nil {
+			t.Error("ID-only refresh check never ran.")
+		}
+	}
+
+	// If we have a state, then run the destroy
+	if state != nil {
+		lastStep := c.Steps[len(c.Steps)-1]
+		destroyStep := TestStep{
+			Config:                    lastStep.Config,
+			Check:                     c.CheckDestroy,
+			Destroy:                   true,
+			PreventDiskCleanup:        lastStep.PreventDiskCleanup,
+			PreventPostDestroyRefresh: c.PreventPostDestroyRefresh,
+			providers:                 providers,
+		}
+
+		log.Printf("[WARN] Test: Executing destroy step")
+		state, err := testStep(opts, state, destroyStep)
+		if err != nil {
+			t.Error(fmt.Sprintf(
+				"Error destroying resource! WARNING: Dangling resources\n"+
+					"may exist. The full state and error is shown below.\n\n"+
+					"Error: %s\n\nState: %s",
+				err,
+				state))
+		}
+	} else {
+		log.Printf("[WARN] Skipping destroy test since there is no state.")
+	}
 }
 
 // testProviderConfig takes the list of Providers in a TestCase and returns a
@@ -595,14 +812,208 @@ func testProviderConfig(c TestCase) (string, error) {
 	return strings.Join(lines, ""), nil
 }
 
+// testProviderFactories combines the fixed Providers and
+// ResourceProviderFactory functions into a single map of
+// ResourceProviderFactory functions.
+func testProviderFactories(c TestCase) map[string]terraform.ResourceProviderFactory {
+	ctxProviders := make(map[string]terraform.ResourceProviderFactory)
+	for k, pf := range c.ProviderFactories {
+		ctxProviders[k] = pf
+	}
+
+	// add any fixed providers
+	for k, p := range c.Providers {
+		ctxProviders[k] = terraform.ResourceProviderFactoryFixed(p)
+	}
+	return ctxProviders
+}
+
+// testProviderResolver is a helper to build a ResourceProviderResolver
+// with pre instantiated ResourceProviders, so that we can reset them for the
+// test, while only calling the factory function once.
+// Any errors are stored so that they can be returned by the factory in
+// terraform to match non-test behavior.
+func testProviderResolver(c TestCase) (providers.Resolver, error) {
+	ctxProviders := testProviderFactories(c)
+
+	// wrap the old provider factories in the test grpc server so they can be
+	// called from terraform.
+	newProviders := make(map[string]providers.Factory)
+
+	for k, pf := range ctxProviders {
+		factory := pf // must copy to ensure each closure sees its own value
+		newProviders[k] = func() (providers.Interface, error) {
+			p, err := factory()
+			if err != nil {
+				return nil, err
+			}
+
+			// The provider is wrapped in a GRPCTestProvider so that it can be
+			// passed back to terraform core as a providers.Interface, rather
+			// than the legacy ResourceProvider.
+			return GRPCTestProvider(p), nil
+		}
+	}
+
+	return providers.ResolverFixed(newProviders), nil
+}
+
 // UnitTest is a helper to force the acceptance testing harness to run in the
 // normal unit test suite. This should only be used for resource that don't
 // have any external dependencies.
-func UnitTest(t testing.T, c TestCase) {
-	t.Helper()
-
+func UnitTest(t TestT, c TestCase) {
 	c.IsUnitTest = true
 	Test(t, c)
+}
+
+func testIDOnlyRefresh(c TestCase, opts terraform.ContextOpts, step TestStep, r *terraform.ResourceState) error {
+	// TODO: We guard by this right now so master doesn't explode. We
+	// need to remove this eventually to make this part of the normal tests.
+	if os.Getenv("TF_ACC_IDONLY") == "" {
+		return nil
+	}
+
+	addr := addrs.Resource{
+		Mode: addrs.ManagedResourceMode,
+		Type: r.Type,
+		Name: "foo",
+	}.Instance(addrs.NoKey)
+	absAddr := addr.Absolute(addrs.RootModuleInstance)
+
+	// Build the state. The state is just the resource with an ID. There
+	// are no attributes. We only set what is needed to perform a refresh.
+	state := states.NewState()
+	state.RootModule().SetResourceInstanceCurrent(
+		addr,
+		&states.ResourceInstanceObjectSrc{
+			AttrsFlat: r.Primary.Attributes,
+			Status:    states.ObjectReady,
+		},
+		addrs.ProviderConfig{Type: "placeholder"}.Absolute(addrs.RootModuleInstance),
+	)
+
+	// Create the config module. We use the full config because Refresh
+	// doesn't have access to it and we may need things like provider
+	// configurations. The initial implementation of id-only checks used
+	// an empty config module, but that caused the aforementioned problems.
+	cfg, err := testConfig(opts, step)
+	if err != nil {
+		return err
+	}
+
+	// Initialize the context
+	opts.Config = cfg
+	opts.State = state
+	ctx, ctxDiags := terraform.NewContext(&opts)
+	if ctxDiags.HasErrors() {
+		return ctxDiags.Err()
+	}
+	if diags := ctx.Validate(); len(diags) > 0 {
+		if diags.HasErrors() {
+			return errwrap.Wrapf("config is invalid: {{err}}", diags.Err())
+		}
+
+		log.Printf("[WARN] Config warnings:\n%s", diags.Err().Error())
+	}
+
+	// Refresh!
+	state, refreshDiags := ctx.Refresh()
+	if refreshDiags.HasErrors() {
+		return refreshDiags.Err()
+	}
+
+	// Verify attribute equivalence.
+	actualR := state.ResourceInstance(absAddr)
+	if actualR == nil {
+		return fmt.Errorf("Resource gone!")
+	}
+	if actualR.Current == nil {
+		return fmt.Errorf("Resource has no primary instance")
+	}
+	actual := actualR.Current.AttrsFlat
+	expected := r.Primary.Attributes
+	// Remove fields we're ignoring
+	for _, v := range c.IDRefreshIgnore {
+		for k := range actual {
+			if strings.HasPrefix(k, v) {
+				delete(actual, k)
+			}
+		}
+		for k := range expected {
+			if strings.HasPrefix(k, v) {
+				delete(expected, k)
+			}
+		}
+	}
+
+	if !reflect.DeepEqual(actual, expected) {
+		// Determine only the different attributes
+		for k, v := range expected {
+			if av, ok := actual[k]; ok && v == av {
+				delete(expected, k)
+				delete(actual, k)
+			}
+		}
+
+		spewConf := spew.NewDefaultConfig()
+		spewConf.SortKeys = true
+		return fmt.Errorf(
+			"Attributes not equivalent. Difference is shown below. Top is actual, bottom is expected."+
+				"\n\n%s\n\n%s",
+			spewConf.Sdump(actual), spewConf.Sdump(expected))
+	}
+
+	return nil
+}
+
+func testConfig(opts terraform.ContextOpts, step TestStep) (*configs.Config, error) {
+	if step.PreConfig != nil {
+		step.PreConfig()
+	}
+
+	cfgPath, err := ioutil.TempDir("", "tf-test")
+	if err != nil {
+		return nil, fmt.Errorf("Error creating temporary directory for config: %s", err)
+	}
+
+	if step.PreventDiskCleanup {
+		log.Printf("[INFO] Skipping defer os.RemoveAll call")
+	} else {
+		defer os.RemoveAll(cfgPath)
+	}
+
+	// Write the main configuration file
+	err = ioutil.WriteFile(filepath.Join(cfgPath, "main.tf"), []byte(step.Config), os.ModePerm)
+	if err != nil {
+		return nil, fmt.Errorf("Error creating temporary file for config: %s", err)
+	}
+
+	// Create directory for our child modules, if any.
+	modulesDir := filepath.Join(cfgPath, ".modules")
+	err = os.Mkdir(modulesDir, os.ModePerm)
+	if err != nil {
+		return nil, fmt.Errorf("Error creating child modules directory: %s", err)
+	}
+
+	inst := initwd.NewModuleInstaller(modulesDir, nil)
+	_, installDiags := inst.InstallModules(cfgPath, true, initwd.ModuleInstallHooksImpl{})
+	if installDiags.HasErrors() {
+		return nil, installDiags.Err()
+	}
+
+	loader, err := configload.NewLoader(&configload.Config{
+		ModulesDir: modulesDir,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create config loader: %s", err)
+	}
+
+	config, configDiags := loader.LoadConfig(cfgPath)
+	if configDiags.HasErrors() {
+		return nil, configDiags
+	}
+
+	return config, nil
 }
 
 func testResource(c TestStep, state *terraform.State) (*terraform.ResourceState, error) {
@@ -897,14 +1308,6 @@ func TestCheckModuleResourceAttrPair(mpFirst []string, nameFirst string, keyFirs
 }
 
 func testCheckResourceAttrPair(isFirst *terraform.InstanceState, nameFirst string, keyFirst string, isSecond *terraform.InstanceState, nameSecond string, keySecond string) error {
-	if nameFirst == nameSecond && keyFirst == keySecond {
-		return fmt.Errorf(
-			"comparing self: resource %s attribute %s",
-			nameFirst,
-			keyFirst,
-		)
-	}
-
 	vFirst, okFirst := isFirst.Attributes[keyFirst]
 	vSecond, okSecond := isSecond.Attributes[keySecond]
 
@@ -986,6 +1389,20 @@ func TestMatchOutput(name string, r *regexp.Regexp) TestCheckFunc {
 	}
 }
 
+// TestT is the interface used to handle the test lifecycle of a test.
+//
+// Users should just use a *testing.T object, which implements this.
+type TestT interface {
+	Error(args ...interface{})
+	Fatal(args ...interface{})
+	Skip(args ...interface{})
+	Name() string
+	Parallel()
+}
+
+// This is set to true by unit tests to alter some behavior
+var testTesting = false
+
 // modulePrimaryInstanceState returns the instance state for the given resource
 // name in a ModuleState
 func modulePrimaryInstanceState(s *terraform.State, ms *terraform.ModuleState, name string) (*terraform.InstanceState, error) {
@@ -1020,6 +1437,50 @@ func primaryInstanceState(s *terraform.State, name string) (*terraform.InstanceS
 	return modulePrimaryInstanceState(s, ms, name)
 }
 
+// operationError is a specialized implementation of error used to describe
+// failures during one of the several operations performed for a particular
+// test case.
+type operationError struct {
+	OpName string
+	Diags  tfdiags.Diagnostics
+}
+
+func newOperationError(opName string, diags tfdiags.Diagnostics) error {
+	return operationError{opName, diags}
+}
+
+// Error returns a terse error string containing just the basic diagnostic
+// messages, for situations where normal Go error behavior is appropriate.
+func (err operationError) Error() string {
+	return fmt.Sprintf("errors during %s: %s", err.OpName, err.Diags.Err().Error())
+}
+
+// ErrorDetail is like Error except it includes verbosely-rendered diagnostics
+// similar to what would come from a normal Terraform run, which include
+// additional context not included in Error().
+func (err operationError) ErrorDetail() string {
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "errors during %s:", err.OpName)
+	clr := &colorstring.Colorize{Disable: true, Colors: colorstring.DefaultColors}
+	for _, diag := range err.Diags {
+		diagStr := format.Diagnostic(diag, nil, clr, 78)
+		buf.WriteByte('\n')
+		buf.WriteString(diagStr)
+	}
+	return buf.String()
+}
+
+// detailedErrorMessage is a helper for calling ErrorDetail on an error if
+// it is an operationError or just taking Error otherwise.
+func detailedErrorMessage(err error) string {
+	switch tErr := err.(type) {
+	case operationError:
+		return tErr.ErrorDetail()
+	default:
+		return err.Error()
+	}
+}
+
 // indexesIntoTypeSet is a heuristic to try and identify if a flatmap style
 // string address uses a precalculated TypeSet hash, which are integers and
 // typically are large and obviously not a list index
@@ -1036,7 +1497,7 @@ func checkIfIndexesIntoTypeSet(key string, f TestCheckFunc) TestCheckFunc {
 	return func(s *terraform.State) error {
 		err := f(s)
 		if err != nil && s.IsBinaryDrivenTest && indexesIntoTypeSet(key) {
-			return fmt.Errorf("Error in test check: %s\nTest check address %q likely indexes into TypeSet\nThis is currently not possible in the SDK", err, key)
+			return fmt.Errorf("Error in test check: %s\nTest check address %q likely indexes into TypeSet\nThis is not possible in V1 of the SDK while using the binary driver\nPlease disable the driver for this TestCase with DisableBinaryDriver: true", err, key)
 		}
 		return err
 	}
@@ -1046,7 +1507,7 @@ func checkIfIndexesIntoTypeSetPair(keyFirst, keySecond string, f TestCheckFunc) 
 	return func(s *terraform.State) error {
 		err := f(s)
 		if err != nil && s.IsBinaryDrivenTest && (indexesIntoTypeSet(keyFirst) || indexesIntoTypeSet(keySecond)) {
-			return fmt.Errorf("Error in test check: %s\nTest check address %q or %q likely indexes into TypeSet\nThis is currently not possible in the SDK", err, keyFirst, keySecond)
+			return fmt.Errorf("Error in test check: %s\nTest check address %q or %q likely indexes into TypeSet\nThis is not possible in V1 of the SDK while using the binary driver\nPlease disable the driver for this TestCase with DisableBinaryDriver: true", err, keyFirst, keySecond)
 		}
 		return err
 	}

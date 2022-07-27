@@ -1,7 +1,7 @@
 package configschema
 
 import (
-	"github.com/hashicorp/go-cty/cty"
+	"github.com/zclconf/go-cty/cty"
 )
 
 // StringKind represents the format a string is in.

@@ -1,135 +1,20 @@
 package convert
 
 import (
-	"fmt"
+	"encoding/json"
 	"log"
 	"reflect"
 	"sort"
 
-	"github.com/hashicorp/go-cty/cty"
-	"github.com/hashicorp/terraform-plugin-go/tfprotov5"
-	"github.com/hashicorp/terraform-plugin-go/tftypes"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/internal/configs/configschema"
+	"github.com/hashicorp/terraform-plugin-sdk/internal/configs/configschema"
+	"github.com/hashicorp/terraform-plugin-sdk/internal/providers"
+	proto "github.com/hashicorp/terraform-plugin-sdk/internal/tfplugin5"
 )
 
-func tftypeFromCtyType(in cty.Type) (tftypes.Type, error) {
-	switch {
-	case in.Equals(cty.String):
-		return tftypes.String, nil
-	case in.Equals(cty.Number):
-		return tftypes.Number, nil
-	case in.Equals(cty.Bool):
-		return tftypes.Bool, nil
-	case in.Equals(cty.DynamicPseudoType):
-		return tftypes.DynamicPseudoType, nil
-	case in.IsSetType():
-		elemType, err := tftypeFromCtyType(in.ElementType())
-		if err != nil {
-			return nil, err
-		}
-		return tftypes.Set{
-			ElementType: elemType,
-		}, nil
-	case in.IsListType():
-		elemType, err := tftypeFromCtyType(in.ElementType())
-		if err != nil {
-			return nil, err
-		}
-		return tftypes.List{
-			ElementType: elemType,
-		}, nil
-	case in.IsTupleType():
-		elemTypes := make([]tftypes.Type, 0, in.Length())
-		for _, typ := range in.TupleElementTypes() {
-			elemType, err := tftypeFromCtyType(typ)
-			if err != nil {
-				return nil, err
-			}
-			elemTypes = append(elemTypes, elemType)
-		}
-		return tftypes.Tuple{
-			ElementTypes: elemTypes,
-		}, nil
-	case in.IsMapType():
-		elemType, err := tftypeFromCtyType(in.ElementType())
-		if err != nil {
-			return nil, err
-		}
-		return tftypes.Map{
-			AttributeType: elemType,
-		}, nil
-	case in.IsObjectType():
-		attrTypes := make(map[string]tftypes.Type)
-		for key, typ := range in.AttributeTypes() {
-			attrType, err := tftypeFromCtyType(typ)
-			if err != nil {
-				return nil, err
-			}
-			attrTypes[key] = attrType
-		}
-		return tftypes.Object{
-			AttributeTypes: attrTypes,
-		}, nil
-	}
-	return nil, fmt.Errorf("unknown cty type %s", in.GoString())
-}
-
-func ctyTypeFromTFType(in tftypes.Type) (cty.Type, error) {
-	switch {
-	case in.Is(tftypes.String):
-		return cty.String, nil
-	case in.Is(tftypes.Bool):
-		return cty.Bool, nil
-	case in.Is(tftypes.Number):
-		return cty.Number, nil
-	case in.Is(tftypes.DynamicPseudoType):
-		return cty.DynamicPseudoType, nil
-	case in.Is(tftypes.List{}):
-		elemType, err := ctyTypeFromTFType(in.(tftypes.List).ElementType)
-		if err != nil {
-			return cty.Type{}, err
-		}
-		return cty.List(elemType), nil
-	case in.Is(tftypes.Set{}):
-		elemType, err := ctyTypeFromTFType(in.(tftypes.Set).ElementType)
-		if err != nil {
-			return cty.Type{}, err
-		}
-		return cty.Set(elemType), nil
-	case in.Is(tftypes.Map{}):
-		elemType, err := ctyTypeFromTFType(in.(tftypes.Map).AttributeType)
-		if err != nil {
-			return cty.Type{}, err
-		}
-		return cty.Map(elemType), nil
-	case in.Is(tftypes.Tuple{}):
-		elemTypes := make([]cty.Type, 0, len(in.(tftypes.Tuple).ElementTypes))
-		for _, typ := range in.(tftypes.Tuple).ElementTypes {
-			elemType, err := ctyTypeFromTFType(typ)
-			if err != nil {
-				return cty.Type{}, err
-			}
-			elemTypes = append(elemTypes, elemType)
-		}
-		return cty.Tuple(elemTypes), nil
-	case in.Is(tftypes.Object{}):
-		attrTypes := make(map[string]cty.Type, len(in.(tftypes.Object).AttributeTypes))
-		for k, v := range in.(tftypes.Object).AttributeTypes {
-			attrType, err := ctyTypeFromTFType(v)
-			if err != nil {
-				return cty.Type{}, err
-			}
-			attrTypes[k] = attrType
-		}
-		return cty.Object(attrTypes), nil
-	}
-	return cty.Type{}, fmt.Errorf("unknown tftypes.Type %s", in)
-}
-
 // ConfigSchemaToProto takes a *configschema.Block and converts it to a
-// tfprotov5.SchemaBlock for a grpc response.
-func ConfigSchemaToProto(b *configschema.Block) *tfprotov5.SchemaBlock {
-	block := &tfprotov5.SchemaBlock{
+// proto.Schema_Block for a grpc response.
+func ConfigSchemaToProto(b *configschema.Block) *proto.Schema_Block {
+	block := &proto.Schema_Block{
 		Description:     b.Description,
 		DescriptionKind: protoStringKind(b.DescriptionKind),
 		Deprecated:      b.Deprecated,
@@ -138,7 +23,7 @@ func ConfigSchemaToProto(b *configschema.Block) *tfprotov5.SchemaBlock {
 	for _, name := range sortedKeys(b.Attributes) {
 		a := b.Attributes[name]
 
-		attr := &tfprotov5.SchemaAttribute{
+		attr := &proto.Schema_Attribute{
 			Name:            name,
 			Description:     a.Description,
 			DescriptionKind: protoStringKind(a.DescriptionKind),
@@ -149,11 +34,12 @@ func ConfigSchemaToProto(b *configschema.Block) *tfprotov5.SchemaBlock {
 			Deprecated:      a.Deprecated,
 		}
 
-		var err error
-		attr.Type, err = tftypeFromCtyType(a.Type)
+		ty, err := json.Marshal(a.Type)
 		if err != nil {
 			panic(err)
 		}
+
+		attr.Type = ty
 
 		block.Attributes = append(block.Attributes, attr)
 	}
@@ -166,35 +52,35 @@ func ConfigSchemaToProto(b *configschema.Block) *tfprotov5.SchemaBlock {
 	return block
 }
 
-func protoStringKind(k configschema.StringKind) tfprotov5.StringKind {
+func protoStringKind(k configschema.StringKind) proto.StringKind {
 	switch k {
 	default:
 		log.Printf("[TRACE] unexpected configschema.StringKind: %d", k)
-		return tfprotov5.StringKindPlain
+		return proto.StringKind_PLAIN
 	case configschema.StringPlain:
-		return tfprotov5.StringKindPlain
+		return proto.StringKind_PLAIN
 	case configschema.StringMarkdown:
-		return tfprotov5.StringKindMarkdown
+		return proto.StringKind_MARKDOWN
 	}
 }
 
-func protoSchemaNestedBlock(name string, b *configschema.NestedBlock) *tfprotov5.SchemaNestedBlock {
-	var nesting tfprotov5.SchemaNestedBlockNestingMode
+func protoSchemaNestedBlock(name string, b *configschema.NestedBlock) *proto.Schema_NestedBlock {
+	var nesting proto.Schema_NestedBlock_NestingMode
 	switch b.Nesting {
 	case configschema.NestingSingle:
-		nesting = tfprotov5.SchemaNestedBlockNestingModeSingle
+		nesting = proto.Schema_NestedBlock_SINGLE
 	case configschema.NestingGroup:
-		nesting = tfprotov5.SchemaNestedBlockNestingModeGroup
+		nesting = proto.Schema_NestedBlock_GROUP
 	case configschema.NestingList:
-		nesting = tfprotov5.SchemaNestedBlockNestingModeList
+		nesting = proto.Schema_NestedBlock_LIST
 	case configschema.NestingSet:
-		nesting = tfprotov5.SchemaNestedBlockNestingModeSet
+		nesting = proto.Schema_NestedBlock_SET
 	case configschema.NestingMap:
-		nesting = tfprotov5.SchemaNestedBlockNestingModeMap
+		nesting = proto.Schema_NestedBlock_MAP
 	default:
-		nesting = tfprotov5.SchemaNestedBlockNestingModeInvalid
+		nesting = proto.Schema_NestedBlock_INVALID
 	}
-	return &tfprotov5.SchemaNestedBlock{
+	return &proto.Schema_NestedBlock{
 		TypeName: name,
 		Block:    ConfigSchemaToProto(&b.Block),
 		Nesting:  nesting,
@@ -203,9 +89,17 @@ func protoSchemaNestedBlock(name string, b *configschema.NestedBlock) *tfprotov5
 	}
 }
 
-// ProtoToConfigSchema takes the GetSchema_Block from a grpc response and converts it
+// ProtoToProviderSchema takes a proto.Schema and converts it to a providers.Schema.
+func ProtoToProviderSchema(s *proto.Schema) providers.Schema {
+	return providers.Schema{
+		Version: s.Version,
+		Block:   ProtoToConfigSchema(s.Block),
+	}
+}
+
+// ProtoToConfigSchema takes the GetSchcema_Block from a grpc response and converts it
 // to a terraform *configschema.Block.
-func ProtoToConfigSchema(b *tfprotov5.SchemaBlock) *configschema.Block {
+func ProtoToConfigSchema(b *proto.Schema_Block) *configschema.Block {
 	block := &configschema.Block{
 		Attributes: make(map[string]*configschema.Attribute),
 		BlockTypes: make(map[string]*configschema.NestedBlock),
@@ -226,9 +120,7 @@ func ProtoToConfigSchema(b *tfprotov5.SchemaBlock) *configschema.Block {
 			Deprecated:      a.Deprecated,
 		}
 
-		var err error
-		attr.Type, err = ctyTypeFromTFType(a.Type)
-		if err != nil {
+		if err := json.Unmarshal(a.Type, &attr.Type); err != nil {
 			panic(err)
 		}
 
@@ -242,30 +134,30 @@ func ProtoToConfigSchema(b *tfprotov5.SchemaBlock) *configschema.Block {
 	return block
 }
 
-func schemaStringKind(k tfprotov5.StringKind) configschema.StringKind {
+func schemaStringKind(k proto.StringKind) configschema.StringKind {
 	switch k {
 	default:
-		log.Printf("[TRACE] unexpected tfprotov5.StringKind: %d", k)
+		log.Printf("[TRACE] unexpected proto.StringKind: %d", k)
 		return configschema.StringPlain
-	case tfprotov5.StringKindPlain:
+	case proto.StringKind_PLAIN:
 		return configschema.StringPlain
-	case tfprotov5.StringKindMarkdown:
+	case proto.StringKind_MARKDOWN:
 		return configschema.StringMarkdown
 	}
 }
 
-func schemaNestedBlock(b *tfprotov5.SchemaNestedBlock) *configschema.NestedBlock {
+func schemaNestedBlock(b *proto.Schema_NestedBlock) *configschema.NestedBlock {
 	var nesting configschema.NestingMode
 	switch b.Nesting {
-	case tfprotov5.SchemaNestedBlockNestingModeSingle:
+	case proto.Schema_NestedBlock_SINGLE:
 		nesting = configschema.NestingSingle
-	case tfprotov5.SchemaNestedBlockNestingModeGroup:
+	case proto.Schema_NestedBlock_GROUP:
 		nesting = configschema.NestingGroup
-	case tfprotov5.SchemaNestedBlockNestingModeList:
+	case proto.Schema_NestedBlock_LIST:
 		nesting = configschema.NestingList
-	case tfprotov5.SchemaNestedBlockNestingModeMap:
+	case proto.Schema_NestedBlock_MAP:
 		nesting = configschema.NestingMap
-	case tfprotov5.SchemaNestedBlockNestingModeSet:
+	case proto.Schema_NestedBlock_SET:
 		nesting = configschema.NestingSet
 	default:
 		// In all other cases we'll leave it as the zero value (invalid) and

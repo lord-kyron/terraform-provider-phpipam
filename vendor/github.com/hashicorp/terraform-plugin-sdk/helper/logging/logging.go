@@ -1,7 +1,6 @@
 package logging
 
 import (
-	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
@@ -18,14 +17,12 @@ import (
 const (
 	EnvLog     = "TF_LOG"      // Set to True
 	EnvLogFile = "TF_LOG_PATH" // Set to a file
-	// EnvLogPathMask splits test log files by name.
-	EnvLogPathMask = "TF_LOG_PATH_MASK"
 )
 
 var ValidLevels = []logutils.LogLevel{"TRACE", "DEBUG", "INFO", "WARN", "ERROR"}
 
 // LogOutput determines where we should send logs (if anywhere) and the log level.
-func LogOutput(t testing.T) (logOutput io.Writer, err error) {
+func LogOutput() (logOutput io.Writer, err error) {
 	logOutput = ioutil.Discard
 
 	logLevel := LogLevel()
@@ -35,18 +32,6 @@ func LogOutput(t testing.T) (logOutput io.Writer, err error) {
 
 	logOutput = os.Stderr
 	if logPath := os.Getenv(EnvLogFile); logPath != "" {
-		var err error
-		logOutput, err = os.OpenFile(logPath, syscall.O_CREAT|syscall.O_RDWR|syscall.O_APPEND, 0666)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	if logPathMask := os.Getenv(EnvLogPathMask); logPathMask != "" {
-		// Escape special characters which may appear if we have subtests
-		testName := strings.Replace(t.Name(), "/", "__", -1)
-
-		logPath := fmt.Sprintf(logPathMask, testName)
 		var err error
 		logOutput, err = os.OpenFile(logPath, syscall.O_CREAT|syscall.O_RDWR|syscall.O_APPEND, 0666)
 		if err != nil {
@@ -64,11 +49,24 @@ func LogOutput(t testing.T) (logOutput io.Writer, err error) {
 	return
 }
 
+// SetTestOutput is equivalent to SetOutput, but declares itself a test
+// helper so it doesn't show up as the source of errors when testing.
+func SetTestOutput(t testing.T) {
+	setOutput(t)
+}
+
 // SetOutput checks for a log destination with LogOutput, and calls
 // log.SetOutput with the result. If LogOutput returns nil, SetOutput uses
 // ioutil.Discard. Any error from LogOutout is fatal.
-func SetOutput(t testing.T) {
-	out, err := LogOutput(t)
+func SetOutput() {
+	setOutput(nil)
+}
+
+func setOutput(t testing.T) {
+	if t != nil {
+		t.Helper()
+	}
+	out, err := LogOutput()
 	if err != nil {
 		log.Fatal(err)
 	}

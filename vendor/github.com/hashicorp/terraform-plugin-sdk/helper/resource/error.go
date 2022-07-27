@@ -26,10 +26,6 @@ func (e *NotFoundError) Error() string {
 	return "couldn't find resource"
 }
 
-func (e *NotFoundError) Unwrap() error {
-	return e.LastError
-}
-
 // UnexpectedStateError is returned when Refresh returns a state that's neither in Target nor Pending
 type UnexpectedStateError struct {
 	LastError     error
@@ -44,10 +40,6 @@ func (e *UnexpectedStateError) Error() string {
 		strings.Join(e.ExpectedState, ", "),
 		e.LastError,
 	)
-}
-
-func (e *UnexpectedStateError) Unwrap() error {
-	return e.LastError
 }
 
 // TimeoutError is returned when WaitForState times out
@@ -84,8 +76,4 @@ func (e *TimeoutError) Error() string {
 
 	return fmt.Sprintf("timeout while waiting for %s%s",
 		expectedState, suffix)
-}
-
-func (e *TimeoutError) Unwrap() error {
-	return e.LastError
 }

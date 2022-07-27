@@ -51,6 +51,8 @@ func SerializeValueForHash(buf *bytes.Buffer, val interface{}, schema *Schema) {
 			buf.WriteRune(':')
 
 			switch innerVal := innerVal.(type) {
+			case bool:
+				buf.WriteString(strconv.FormatBool(innerVal))
 			case int:
 				buf.WriteString(strconv.Itoa(innerVal))
 			case float64:
@@ -91,12 +93,7 @@ func SerializeResourceForHash(buf *bytes.Buffer, val interface{}, resource *Reso
 	sm := resource.Schema
 	m := val.(map[string]interface{})
 	var keys []string
-	allComputed := true
-	for k, v := range sm {
-		if v.Optional || v.Required {
-			allComputed = false
-		}
-
+	for k := range sm {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
@@ -105,7 +102,7 @@ func SerializeResourceForHash(buf *bytes.Buffer, val interface{}, resource *Reso
 		// Skip attributes that are not user-provided. Computed attributes
 		// do not contribute to the hash since their ultimate value cannot
 		// be known at plan/diff time.
-		if !allComputed && !(innerSchema.Required || innerSchema.Optional) {
+		if !(innerSchema.Required || innerSchema.Optional) {
 			continue
 		}
 
