@@ -1,8 +1,6 @@
 # Terraform PHPIPAM provider
 [![release](https://github.com/lord-kyron/terraform-provider-phpipam/actions/workflows/go.yml/badge.svg)](https://github.com/lord-kyron/terraform-provider-phpipam/actions/workflows/go.yml) ![GitHub release (latest by date)](https://img.shields.io/github/v/release/lord-kyron/terraform-provider-phpipam?color=gr&label=version)
 
-# Terraform Provider Plugin for PHPIPAM
-
 This repository holds a external plugin for a [Terraform][1] provider to manage
 resources within [PHPIPAM][2], an open source IP address management system.
 
