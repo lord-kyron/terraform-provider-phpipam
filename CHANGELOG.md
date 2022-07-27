@@ -1,3 +1,14 @@
+## 1.3.4
+ * Applied fix for [issue #43](https://github.com/lord-kyron/terraform-provider-phpipam/issues/43)
+ * Applied fix for [issue #37](https://github.com/lord-kyron/terraform-provider-phpipam/issues/37)
+ * Merged feature from [pull request #41](https://github.com/lord-kyron/terraform-provider-phpipam/pull/41)
+ * Merged feature from [pull request #44](https://github.com/lord-kyron/terraform-provider-phpipam/pull/44)
+ * Merged feature from [pull request #45](https://github.com/lord-kyron/terraform-provider-phpipam/pull/45)
+ * Merged feature from [pull request #46](https://github.com/lord-kyron/terraform-provider-phpipam/pull/46)
+ * Merged feature from [pull request #44](https://github.com/lord-kyron/terraform-provider-phpipam/pull/47)
+ * Build with golang 1.18 (latest)
+ * Updated all vendor repositories to latest versions
+ * Updated go release workflow
 ## 1.0
 New stuff:
  * Added support for terraform multiple resource deployments (count) [Thanks to new repository contributor @pavel-z1]
