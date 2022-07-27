@@ -2,6 +2,8 @@ package phpipam
 
 import (
 	"errors"
+	"log"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
 	"github.com/pavel-z1/phpipam-sdk-go/controllers/sections"
@@ -24,11 +26,19 @@ func dataSourcePHPIPAMSectionRead(d *schema.ResourceData, meta interface{}) erro
 	case d.Get("section_id").(int) != 0:
 		out, err = c.GetSectionByID(d.Get("section_id").(int))
 		if err != nil {
+			if strings.Contains(err.Error(), "Section does not exist") {
+				log.Printf("Can't find section with id %d", d.Get("section_id").(int))
+				return nil
+			}
 			return err
 		}
 	case d.Get("name").(string) != "":
 		out, err = c.GetSectionByName(d.Get("name").(string))
 		if err != nil {
+			if strings.Contains(err.Error(), "Not Found") {
+				log.Printf("Can't find section with name %s", d.Get("name").(string))
+				return nil
+			}
 			return err
 		}
 	default:
