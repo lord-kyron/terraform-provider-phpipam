@@ -1,5 +1,5 @@
 # Terraform PHPIPAM provider - version 1.3.4
-[![release](https://github.com/lord-kyron/terraform-provider-phpipam/actions/workflows/go.yml/badge.svg?branch=v1.3.4)](https://github.com/lord-kyron/terraform-provider-phpipam/actions/workflows/go.yml)
+[![release](https://github.com/lord-kyron/terraform-provider-phpipam/actions/workflows/go.yml/badge.svg?branch=v1.3.4)](https://github.com/lord-kyron/terraform-provider-phpipam/actions/workflows/go.yml)![GitHub release (latest by date)](https://img.shields.io/github/v/release/lord-kyron/terraform-provider-phpipam?color=gr&label=version)
 # ATTENTION!!!
 This repository is based on the original work of github user paybyphone.
 However, the version of the provider in this repo is updated and revised to support working with Terraform 12.x+
