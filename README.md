@@ -1,11 +1,5 @@
 # Terraform PHPIPAM provider
 [![release](https://github.com/lord-kyron/terraform-provider-phpipam/actions/workflows/go.yml/badge.svg)](https://github.com/lord-kyron/terraform-provider-phpipam/actions/workflows/go.yml) ![GitHub release (latest by date)](https://img.shields.io/github/v/release/lord-kyron/terraform-provider-phpipam?color=gr&label=version)
-# ATTENTION!!!
-This repository is based on the original work of github user paybyphone.
-However, the version of the provider in this repo is updated and revised to support working with Terraform 12.x+
-The build here is currently based on the paybyphone original repo + hashicorp original terraform repo and was build around Terraform version 0.13.5
-All credit should go to https://github.com/paybyphone/terraform-provider-phpipam
-Also, big thanks to https://github.com/pavel-z1/phpipam-sdk-go for his forked and updated repo which made deploying multiple resources available!
 
 # Terraform Provider Plugin for PHPIPAM
 
