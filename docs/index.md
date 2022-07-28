@@ -1,12 +1,5 @@
-# Terraform PHPIPAM provider - version 1.2.8
-# ATTENTION!!!
-This repository is based on the original work of github user paybyphone.
-However, the version of the provider in this repo is updated and revised to support working with Terraform 12.x+
-The build here is currently based on the paybyphone original repo + hashicorp original terraform repo and was build around Terraform version 0.13.5
-All credit should go to https://github.com/paybyphone/terraform-provider-phpipam
-Also, big thanks to https://github.com/pavel-z1/phpipam-sdk-go for his forked and updated repo which made deploying multiple resources available!
-
-# Terraform Provider Plugin for PHPIPAM
+# Terraform PHPIPAM provider
+[![release](https://github.com/lord-kyron/terraform-provider-phpipam/actions/workflows/go.yml/badge.svg)](https://github.com/lord-kyron/terraform-provider-phpipam/actions/workflows/go.yml) ![GitHub release (latest by date)](https://img.shields.io/github/v/release/lord-kyron/terraform-provider-phpipam?color=gr&label=version)
 
 This repository holds a external plugin for a [Terraform][1] provider to manage
 resources within [PHPIPAM][2], an open source IP address management system.
@@ -1271,4 +1264,4 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ```
-# terraform-provider-phpipam-1.2.8
+# terraform-provider-phpipam
