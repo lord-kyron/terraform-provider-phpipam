@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/pavel-z1/phpipam-sdk-go/phpipam"
 )
 
@@ -21,6 +21,9 @@ func resourcePHPIPAMAddress() *schema.Resource {
 		Update: resourcePHPIPAMAddressUpdate,
 		Delete: resourcePHPIPAMAddressDelete,
 		Schema: resourceAddressSchema(),
+		Importer: &schema.ResourceImporter{
+			StateContext: schema.ImportStatePassthroughContext,
+		},
 	}
 }
 
@@ -29,7 +32,7 @@ func resourcePHPIPAMAddressCreate(d *schema.ResourceData, meta interface{}) erro
 	c := client.addressesController
 
 	// Get the next free address if no IP is specified.
-	if (d.Get("ip_address").(string) == "") {
+	if d.Get("ip_address").(string) == "" {
 		// By default Terraform runs operations in parallel. Protect the
 		// GetFirstFreeAddress and CreateAddress operations with a lock so they are
 		// not run concurrently.
@@ -38,7 +41,7 @@ func resourcePHPIPAMAddressCreate(d *schema.ResourceData, meta interface{}) erro
 
 		subnet_c := client.subnetsController
 		out, err := subnet_c.GetFirstFreeAddress(d.Get("subnet_id").(int))
-	  if err != nil {
+		if err != nil {
 			return err
 		}
 		if out == "" {

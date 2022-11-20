@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
 
 // resourcePHPIPAMSubnet returns the resource structure for the phpipam_subnet
@@ -21,6 +21,9 @@ func resourcePHPIPAMSubnet() *schema.Resource {
 		Update: resourcePHPIPAMSubnetUpdate,
 		Delete: resourcePHPIPAMSubnetDelete,
 		Schema: resourceSubnetSchema(),
+		Importer: &schema.ResourceImporter{
+			StateContext: schema.ImportStatePassthroughContext,
+		},
 	}
 }
 

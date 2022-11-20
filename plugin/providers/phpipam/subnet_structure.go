@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strconv"
 
-	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/pavel-z1/phpipam-sdk-go/controllers/subnets"
 	"github.com/pavel-z1/phpipam-sdk-go/phpipam"
 )
@@ -116,16 +116,17 @@ func bareSubnetSchema() map[string]*schema.Schema {
 			Type: schema.TypeString,
 		},
 		"gateway": &schema.Schema{
-				Type: schema.TypeMap,
+			Type: schema.TypeMap,
 		},
 		"gateway_id": &schema.Schema{
-				Type: schema.TypeString,
+			Type: schema.TypeString,
 		},
 		"custom_fields": &schema.Schema{
 			Type: schema.TypeMap,
 		},
 	}
 }
+
 // resourceSubnetSchema returns the schema for the phpipam_first_free_subnet resource. It
 // sets the required and optional fields, the latter defined in
 // resourceSubnetRequiredFields, and ensures that all optional and
@@ -135,7 +136,7 @@ func resourceFirstFreeSubnetSchema() map[string]*schema.Schema {
 	for k, v := range schema {
 		switch {
 		// Subnet id and Mask are currently ForceNew
-	case k == "parent_subnet_id" || k == "subnet_mask" :
+		case k == "parent_subnet_id" || k == "subnet_mask":
 			v.Required = true
 			v.ForceNew = true
 		case k == "custom_fields":
@@ -149,6 +150,7 @@ func resourceFirstFreeSubnetSchema() map[string]*schema.Schema {
 	}
 	return schema
 }
+
 // resourceSubnetSchema returns the schema for the phpipam_subnet resource. It
 // sets the required and optional fields, the latter defined in
 // resourceSubnetRequiredFields, and ensures that all optional and
@@ -242,7 +244,7 @@ func expandSubnet(d *schema.ResourceData) subnets.Subnet {
 		VRFID:          d.Get("vrf_id").(int),
 		MasterSubnetID: d.Get("master_subnet_id").(int),
 		NameserverID:   d.Get("nameserver_id").(int),
-		Nameservers:    d.Get("nameservers").(map[string]interface {}),
+		Nameservers:    d.Get("nameservers").(map[string]interface{}),
 		ShowName:       phpipam.BoolIntString(d.Get("show_name").(bool)),
 		Permissions:    d.Get("permissions").(string),
 		DNSRecursive:   phpipam.BoolIntString(d.Get("create_ptr_records").(bool)),
@@ -255,7 +257,7 @@ func expandSubnet(d *schema.ResourceData) subnets.Subnet {
 		IsFull:         phpipam.BoolIntString(d.Get("is_full").(bool)),
 		Threshold:      d.Get("utilization_threshold").(int),
 		Location:       d.Get("location_id").(int),
-		Gateway:	    d.Get("gateway").(map[string]interface {}),
+		Gateway:        d.Get("gateway").(map[string]interface{}),
 		GatewayID:      d.Get("gateway_id").(string),
 	}
 
@@ -275,6 +277,7 @@ func flattenSubnet(s subnets.Subnet, d *schema.ResourceData) {
 	d.Set("vlan_id", s.VLANID)
 	d.Set("vrf_id", s.VRFID)
 	d.Set("master_subnet_id", s.MasterSubnetID)
+	d.Set("parent_subnet_id", s.MasterSubnetID)
 	d.Set("nameserver_id", s.NameserverID)
 	d.Set("nameservers", s.Nameservers)
 	d.Set("show_name", s.ShowName)

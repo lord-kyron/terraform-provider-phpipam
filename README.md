@@ -1247,6 +1247,60 @@ The following attributes are exported:
    not the VLAN number - if you need this, use the `number` parameter.
  * `edit_date` - The date this resource was last updated.
 
+### Resource importing
+
+Importing a resource is supported.
+
+**Example:**
+
+```
+resource "phpipam_subnet" "imported" {
+  #parent_subnet_id = data.phpipam_subnet.gcp_cidr_pool.subnet_id
+  subnet_address = "172.20.0.0"
+  subnet_mask = 24
+  section_id = 1
+}
+```
+
+```ShellSession
+$ terraform import phpipam_subnet.imported 20
+
+$ terraform state show phpipam_subnet.imported
+# phpipam_subnet.imported:
+resource "phpipam_subnet" "imported" {
+    allow_ip_requests      = false
+    create_ptr_records     = false
+    display_hostnames      = false
+    gateway                = {}
+    host_discovery_enabled = false
+    id                     = "20"
+    include_in_ping        = false
+    is_folder              = false
+    is_full                = false
+    linked_subnet_id       = 0
+    location_id            = 0
+    master_subnet_id       = 8
+    nameserver_id          = 0
+    nameservers            = {}
+    parent_subnet_id       = 8
+    permissions            = jsonencode(
+        {
+            "2" = "2"
+            "3" = "1"
+        }
+    )
+    scan_agent_id          = 0
+    section_id             = 1
+    show_name              = false
+    subnet_address         = "172.20.0.0"
+    subnet_id              = 20
+    subnet_mask            = 24
+    utilization_threshold  = 0
+    vlan_id                = 0
+    vrf_id                 = 0
+}
+```
+
 ## LICENSE
 
 ```

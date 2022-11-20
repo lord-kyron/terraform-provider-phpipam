@@ -4,7 +4,7 @@ import (
 	"errors"
 	"strconv"
 
-	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/pavel-z1/phpipam-sdk-go/controllers/addresses"
 	"github.com/pavel-z1/phpipam-sdk-go/phpipam"
 )
@@ -104,7 +104,7 @@ func resourceAddressSchema() map[string]*schema.Schema {
 		case k == "subnet_id":
 			v.Required = true
 			v.ForceNew = true
-	  case k == "ip_address":
+		case k == "ip_address":
 			v.Optional = true
 			v.Computed = true
 			v.ForceNew = true

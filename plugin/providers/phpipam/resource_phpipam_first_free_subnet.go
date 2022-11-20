@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
 
 // resourcePHPIPAMAddress returns the resource structure for the phpipam_address
@@ -20,6 +20,9 @@ func resourcePHPIPAMFirstFreeSubnet() *schema.Resource {
 		Update: resourcePHPIPAMFirstFreeSubnetUpdate,
 		Delete: resourcePHPIPAMFirstFreeSubnetDelete,
 		Schema: resourceFirstFreeSubnetSchema(),
+		Importer: &schema.ResourceImporter{
+			StateContext: schema.ImportStatePassthroughContext,
+		},
 	}
 }
 
@@ -27,7 +30,7 @@ func resourcePHPIPAMFirstFreeSubnetCreate(d *schema.ResourceData, meta interface
 	// Get first free subnet from provided subnet_id
 	subnet_id := d.Get("parent_subnet_id").(int)
 	d.Set("subnet_id", nil)
-  subnet_mask := d.Get("subnet_mask").(int)
+	subnet_mask := d.Get("subnet_mask").(int)
 	// Get address controller and start address creation
 	c := meta.(*ProviderPHPIPAMClient).subnetsController
 
@@ -39,7 +42,6 @@ func resourcePHPIPAMFirstFreeSubnetCreate(d *schema.ResourceData, meta interface
 	}
 	d.Set("subnet_address", out)
 
-
 	// If we have custom fields, set them now. We need to get the IP address's ID
 	// beforehand.
 	if customFields, ok := d.GetOk("custom_fields"); ok {
@@ -47,7 +49,6 @@ func resourcePHPIPAMFirstFreeSubnetCreate(d *schema.ResourceData, meta interface
 		if err != nil {
 			return fmt.Errorf("Could not read IP address after creating: %s", err)
 		}
-
 
 		if len(addrs) != 1 {
 			return errors.New("IP address either missing or multiple results returned by reading IP after creation")

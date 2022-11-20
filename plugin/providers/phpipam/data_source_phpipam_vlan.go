@@ -3,7 +3,7 @@ package phpipam
 import (
 	"errors"
 
-	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/pavel-z1/phpipam-sdk-go/controllers/vlans"
 )
 

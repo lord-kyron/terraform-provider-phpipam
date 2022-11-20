@@ -3,9 +3,10 @@ package phpipam
 import (
 	"errors"
 	"log"
+	"strconv"
 	"strings"
 
-	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/pavel-z1/phpipam-sdk-go/controllers/addresses"
 )
 
@@ -53,7 +54,21 @@ func dataSourcePHPIPAMAddressRead(d *schema.ResourceData, meta interface{}) erro
 			return err
 		}
 	default:
-		return errors.New("No valid combination of parameters found - need one of address_id, ip_address, or subnet_id and (description|hostname|custom_field_filter)")
+		// We need to ensure imported resources are not recreated when terraform apply is ran
+		// imported resources only have an Id which we need to map back to subnet_id
+		id := d.Id()
+		if len(id) > 0 {
+			address_id, err := strconv.Atoi(id)
+			if err != nil {
+				return err
+			}
+			out[0], err = c.GetAddressByID(address_id)
+			if err != nil {
+				return err
+			}
+		} else {
+			return errors.New("No valid combination of parameters found - need one of address_id, ip_address, or subnet_id and (description|hostname|custom_field_filter)")
+		}
 	}
 	if len(out) != 1 {
 		return errors.New("Your search returned zero or multiple results. Please correct your search and try again")
