@@ -2,11 +2,11 @@ package phpipam
 
 import (
 	"fmt"
+	"log"
 	"reflect"
 	"regexp"
-	"log"
 
-	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/pavel-z1/phpipam-sdk-go/controllers/addresses"
 	"github.com/pavel-z1/phpipam-sdk-go/controllers/subnets"
 	"github.com/pavel-z1/phpipam-sdk-go/controllers/vlans"
@@ -86,13 +86,13 @@ func trimMap(in map[string]interface{}) {
 
 // updateCustomFields performs an update of custom fields on a resource, with
 // the following stipulations:
-//  * If we have custom fields, we need to do a diff on what is set versus
-//    what isn't set, and ensure that we clear out the keys that aren't set.
-//    Since our SDK does not currently support NOT NULL custom fields in
-//    PHPIPAM, we can safely set these to nil.
-//  * If we don't have a value for
-//    custom_fields at all, set all keys to nil and update so that all custom
-//    fields get blown away.
+//   - If we have custom fields, we need to do a diff on what is set versus
+//     what isn't set, and ensure that we clear out the keys that aren't set.
+//     Since our SDK does not currently support NOT NULL custom fields in
+//     PHPIPAM, we can safely set these to nil.
+//   - If we don't have a value for
+//     custom_fields at all, set all keys to nil and update so that all custom
+//     fields get blown away.
 func updateCustomFields(d *schema.ResourceData, client interface{}) error {
 	log.Printf("Start Update custom fields ...............")
 	customFields := make(map[string]interface{})

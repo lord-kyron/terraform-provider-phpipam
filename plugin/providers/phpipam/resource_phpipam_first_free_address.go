@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
 
 // resourcePHPIPAMAddress returns the resource structure for the phpipam_address
@@ -20,6 +20,9 @@ func resourcePHPIPAMFirstFreeAddress() *schema.Resource {
 		Update: resourcePHPIPAMFirstFreeAddressUpdate,
 		Delete: resourcePHPIPAMFirstFreeAddressDelete,
 		Schema: resourceFirstFreeAddressSchema(),
+		Importer: &schema.ResourceImporter{
+			StateContext: schema.ImportStatePassthroughContext,
+		},
 	}
 }
 
@@ -171,7 +174,7 @@ func resourcePHPIPAMFirstFreeAddressDelete(d *schema.ResourceData, meta interfac
 	c := meta.(*ProviderPHPIPAMClient).addressesController
 	in := expandAddress(d)
 
-//	if _, err := c.DeleteAddress(in.ID, phpipam.BoolIntString(d.Get("remove_dns_on_delete").(bool))); err != nil {
+	//	if _, err := c.DeleteAddress(in.ID, phpipam.BoolIntString(d.Get("remove_dns_on_delete").(bool))); err != nil {
 	if _, err := c.DeleteAddress(in.ID, false); err != nil {
 		return err
 	}

@@ -3,7 +3,7 @@ package phpipam
 import (
 	"errors"
 
-	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
 
 func dataSourcePHPIPAMFirstFreeSubnet() *schema.Resource {
@@ -28,7 +28,7 @@ func dataSourcePHPIPAMFirstFreeSubnet() *schema.Resource {
 
 func dataSourcePHPIPAMFirstFreeSubnetRead(d *schema.ResourceData, meta interface{}) error {
 	c := meta.(*ProviderPHPIPAMClient).subnetsController
-	out, err := c.GetFirstFreeSubnet(d.Get("subnet_id").(int),d.Get("subnet_mask").(int))
+	out, err := c.GetFirstFreeSubnet(d.Get("subnet_id").(int), d.Get("subnet_mask").(int))
 	if err != nil {
 		return err
 	}

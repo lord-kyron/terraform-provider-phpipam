@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
 
 // resourcePHPIPAMVLAN returns the resource structure for the phpipam_vlan
@@ -20,6 +20,9 @@ func resourcePHPIPAMVLAN() *schema.Resource {
 		Update: resourcePHPIPAMVLANUpdate,
 		Delete: resourcePHPIPAMVLANDelete,
 		Schema: resourceVLANSchema(),
+		Importer: &schema.ResourceImporter{
+			StateContext: schema.ImportStatePassthroughContext,
+		},
 	}
 }
 
