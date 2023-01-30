@@ -1147,7 +1147,7 @@ The resource takes the following parameters:
 
  * `subnet_address` (Required) - The network address of the subnet.
  * `subnet_mask` (Required) - The subnet mask, in bits.
- * `section_id` (Required) - The ID of the section for this address in the
+ * `section_id` (Optional) - The ID of the section for this address in the
    PHPIPAM database.
  * `description` (Optional) - The description set for the subnet.
  * `linked_subnet_id` (Optional) - The ID of the linked subnet in the PHPIPAM
