@@ -139,7 +139,7 @@ func resourceFirstFreeSubnetSchema() map[string]*schema.Schema {
 			v.Required = true
 			v.ForceNew = true
 		case k == "section_id":
-			v.Required = true
+			v.Optional = true
 		case k == "custom_fields":
 			v.Optional = true
 		case resourceSubnetOptionalFields.Has(k):
