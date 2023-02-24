@@ -10,14 +10,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"mime"
 	"net/http"
 	"net/url"
 	"time"
 
-	"github.com/hashicorp/terraform-svchost"
+	svchost "github.com/hashicorp/terraform-svchost"
 	"github.com/hashicorp/terraform-svchost/auth"
 )
 
@@ -42,11 +41,23 @@ var httpTransport = defaultHttpTransport()
 // hostnames and caches the results by hostname to avoid repeated requests
 // for the same information.
 type Disco struct {
+	aliases   map[svchost.Hostname]svchost.Hostname
 	hostCache map[svchost.Hostname]*Host
 	credsSrc  auth.CredentialsSource
 
 	// Transport is a custom http.RoundTripper to use.
 	Transport http.RoundTripper
+}
+
+// ErrServiceDiscoveryNetworkRequest represents the error that occurs when
+// the service discovery fails for an unknown network problem.
+type ErrServiceDiscoveryNetworkRequest struct {
+	err error
+}
+
+func (e ErrServiceDiscoveryNetworkRequest) Error() string {
+	wrapped_error := fmt.Errorf("failed to request discovery document: %w", e.err)
+	return wrapped_error.Error()
 }
 
 // New returns a new initialized discovery object.
@@ -58,6 +69,7 @@ func New() *Disco {
 // the given credentials source.
 func NewWithCredentialsSource(credsSrc auth.CredentialsSource) *Disco {
 	return &Disco{
+		aliases:   make(map[svchost.Hostname]svchost.Hostname),
 		hostCache: make(map[svchost.Hostname]*Host),
 		credsSrc:  credsSrc,
 		Transport: httpTransport,
@@ -93,10 +105,14 @@ func (d *Disco) CredentialsSource() auth.CredentialsSource {
 }
 
 // CredentialsForHost returns a non-nil HostCredentials if the embedded source has
-// credentials available for the host, and a nil HostCredentials if it does not.
+// credentials available for the host, or host alias, and a nil HostCredentials if it does not.
 func (d *Disco) CredentialsForHost(hostname svchost.Hostname) (auth.HostCredentials, error) {
 	if d.credsSrc == nil {
 		return nil, nil
+	}
+	if aliasedHost, aliasExists := d.aliases[hostname]; aliasExists {
+		log.Printf("[DEBUG] CredentialsForHost found alias %s for %s", hostname, aliasedHost)
+		hostname = aliasedHost
 	}
 	return d.credsSrc.ForHost(hostname)
 }
@@ -126,6 +142,13 @@ func (d *Disco) ForceHostServices(hostname svchost.Hostname, services map[string
 		services:  services,
 		transport: d.Transport,
 	}
+}
+
+// Alias accepts an alias and target Hostname. When service discovery is performed
+// or credentials are requested for the alias hostname, the target will be consulted instead.
+func (d *Disco) Alias(alias, target svchost.Hostname) {
+	log.Printf("[DEBUG] Service discovery for %s aliased as %s", target, alias)
+	d.aliases[alias] = target
 }
 
 // Discover runs the discovery protocol against the given hostname (which must
@@ -165,6 +188,11 @@ func (d *Disco) DiscoverServiceURL(hostname svchost.Hostname, serviceID string) 
 // discover implements the actual discovery process, with its result cached
 // by the public-facing Discover method.
 func (d *Disco) discover(hostname svchost.Hostname) (*Host, error) {
+	if aliasedHost, aliasExists := d.aliases[hostname]; aliasExists {
+		log.Printf("[DEBUG] Discover found alias %s for %s", hostname, aliasedHost)
+		hostname = aliasedHost
+	}
+
 	discoURL := &url.URL{
 		Scheme: "https",
 		Host:   hostname.String(),
@@ -204,7 +232,7 @@ func (d *Disco) discover(hostname svchost.Hostname) (*Host, error) {
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to request discovery document: %v", err)
+		return nil, ErrServiceDiscoveryNetworkRequest{err}
 	}
 	defer resp.Body.Close()
 
@@ -222,16 +250,16 @@ func (d *Disco) discover(hostname svchost.Hostname) (*Host, error) {
 	}
 
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("Failed to request discovery document: %s", resp.Status)
+		return nil, fmt.Errorf("failed to request discovery document: %s", resp.Status)
 	}
 
 	contentType := resp.Header.Get("Content-Type")
 	mediaType, _, err := mime.ParseMediaType(contentType)
 	if err != nil {
-		return nil, fmt.Errorf("Discovery URL has a malformed Content-Type %q", contentType)
+		return nil, fmt.Errorf("discovery URL has a malformed Content-Type %q", contentType)
 	}
 	if mediaType != "application/json" {
-		return nil, fmt.Errorf("Discovery URL returned an unsupported Content-Type %q", mediaType)
+		return nil, fmt.Errorf("discovery URL returned an unsupported Content-Type %q", mediaType)
 	}
 
 	// This doesn't catch chunked encoding, because ContentLength is -1 in that case.
@@ -239,7 +267,7 @@ func (d *Disco) discover(hostname svchost.Hostname) (*Host, error) {
 		// Size limit here is not a contractual requirement and so we may
 		// adjust it over time if we find a different limit is warranted.
 		return nil, fmt.Errorf(
-			"Discovery doc response is too large (got %d bytes; limit %d)",
+			"discovery doc response is too large (got %d bytes; limit %d)",
 			resp.ContentLength, maxDiscoDocBytes,
 		)
 	}
@@ -248,15 +276,15 @@ func (d *Disco) discover(hostname svchost.Hostname) (*Host, error) {
 	// size, but we'll at least prevent reading the entire thing into memory.
 	lr := io.LimitReader(resp.Body, maxDiscoDocBytes)
 
-	servicesBytes, err := ioutil.ReadAll(lr)
+	servicesBytes, err := io.ReadAll(lr)
 	if err != nil {
-		return nil, fmt.Errorf("Error reading discovery document body: %v", err)
+		return nil, fmt.Errorf("error reading discovery document body: %v", err)
 	}
 
 	var services map[string]interface{}
 	err = json.Unmarshal(servicesBytes, &services)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to decode discovery document as a JSON object: %v", err)
+		return nil, fmt.Errorf("failed to decode discovery document as a JSON object: %v", err)
 	}
 	host.services = services
 
@@ -272,4 +300,11 @@ func (d *Disco) Forget(hostname svchost.Hostname) {
 // ForgetAll is like Forget, but for all of the hostnames that have cache entries.
 func (d *Disco) ForgetAll() {
 	d.hostCache = make(map[svchost.Hostname]*Host)
+}
+
+// ForgetAlias removes a previously aliased hostname as well as its cached entry, if any exist.
+// If the alias has no target then this is a no-op.
+func (d *Disco) ForgetAlias(alias svchost.Hostname) {
+	delete(d.aliases, alias)
+	d.Forget(alias)
 }
