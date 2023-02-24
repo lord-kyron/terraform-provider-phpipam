@@ -1,3 +1,10 @@
+## 1.3.8
+ * Updated vendor repos
+ * Build with Go 1.20
+ * Merged feature from [pull request #51](https://github.com/lord-kyron/terraform-provider-phpipam/pull/51)
+ * Merged feature from [pull request #56](https://github.com/lord-kyron/terraform-provider-phpipam/pull/56)
+## 1.3.6
+ * Updated vendor repos
 ## 1.3.4
  * Applied fix for [issue #43](https://github.com/lord-kyron/terraform-provider-phpipam/issues/43)
  * Applied fix for [issue #37](https://github.com/lord-kyron/terraform-provider-phpipam/issues/37)
