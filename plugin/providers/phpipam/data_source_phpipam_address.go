@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/pavel-z1/phpipam-sdk-go/controllers/addresses"
+	"github.com/simplekube-ro/phpipam-sdk-go/controllers/addresses"
 )
 
 func dataSourcePHPIPAMAddress() *schema.Resource {

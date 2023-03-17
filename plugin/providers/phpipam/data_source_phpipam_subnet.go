@@ -6,7 +6,7 @@ import (
 	"strconv"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/pavel-z1/phpipam-sdk-go/controllers/subnets"
+	"github.com/simplekube-ro/phpipam-sdk-go/controllers/subnets"
 )
 
 func dataSourcePHPIPAMSubnet() *schema.Resource {

@@ -5,7 +5,7 @@ testacc:
 	TF_ACC=1 go test -v ./plugin/providers/phpipam -run="TestAcc"
 
 build: deps
-	gox -osarch="linux/amd64 windows/amd64 darwin/amd64 darwin/arm64" \
+	gox -osarch="linux/amd64 windows/386 windows/amd64 darwin/amd64 darwin/arm64" \
 	-output="pkg/{{.OS}}_{{.Arch}}/terraform-provider-phpipam" .
 
 release: release_bump release_build

@@ -23,13 +23,9 @@ cloud.google.com/go/storage/internal/apiv2/stubs
 # github.com/Masterminds/goutils v1.1.1
 ## explicit
 github.com/Masterminds/goutils
-# github.com/Masterminds/semver v1.5.0
-## explicit
 # github.com/Masterminds/semver/v3 v3.1.1
 ## explicit; go 1.12
 github.com/Masterminds/semver/v3
-# github.com/Masterminds/sprig v2.22.0+incompatible
-## explicit
 # github.com/Masterminds/sprig/v3 v3.2.1
 ## explicit; go 1.13
 github.com/Masterminds/sprig/v3
@@ -102,8 +98,6 @@ github.com/bgentry/go-netrc/netrc
 # github.com/bgentry/speakeasy v0.1.0
 ## explicit
 github.com/bgentry/speakeasy
-# github.com/davecgh/go-spew v1.1.1
-## explicit
 # github.com/fatih/color v1.14.1
 ## explicit; go 1.17
 github.com/fatih/color
@@ -351,16 +345,6 @@ github.com/mitchellh/reflectwalk
 # github.com/oklog/run v1.1.0
 ## explicit; go 1.13
 github.com/oklog/run
-# github.com/pavel-z1/phpipam-sdk-go v0.1.3
-## explicit; go 1.13
-github.com/pavel-z1/phpipam-sdk-go/controllers/addresses
-github.com/pavel-z1/phpipam-sdk-go/controllers/sections
-github.com/pavel-z1/phpipam-sdk-go/controllers/subnets
-github.com/pavel-z1/phpipam-sdk-go/controllers/vlans
-github.com/pavel-z1/phpipam-sdk-go/phpipam
-github.com/pavel-z1/phpipam-sdk-go/phpipam/client
-github.com/pavel-z1/phpipam-sdk-go/phpipam/request
-github.com/pavel-z1/phpipam-sdk-go/phpipam/session
 # github.com/posener/complete v1.2.1
 ## explicit
 github.com/posener/complete
@@ -370,6 +354,16 @@ github.com/posener/complete/match
 # github.com/shopspring/decimal v1.2.0
 ## explicit; go 1.13
 github.com/shopspring/decimal
+# github.com/simplekube-ro/phpipam-sdk-go v0.1.5
+## explicit; go 1.19
+github.com/simplekube-ro/phpipam-sdk-go/controllers/addresses
+github.com/simplekube-ro/phpipam-sdk-go/controllers/sections
+github.com/simplekube-ro/phpipam-sdk-go/controllers/subnets
+github.com/simplekube-ro/phpipam-sdk-go/controllers/vlans
+github.com/simplekube-ro/phpipam-sdk-go/phpipam
+github.com/simplekube-ro/phpipam-sdk-go/phpipam/client
+github.com/simplekube-ro/phpipam-sdk-go/phpipam/request
+github.com/simplekube-ro/phpipam-sdk-go/phpipam/session
 # github.com/spf13/afero v1.2.2
 ## explicit
 github.com/spf13/afero

@@ -5,8 +5,8 @@ import (
 	"strconv"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/pavel-z1/phpipam-sdk-go/controllers/addresses"
-	"github.com/pavel-z1/phpipam-sdk-go/phpipam"
+	"github.com/simplekube-ro/phpipam-sdk-go/controllers/addresses"
+	"github.com/simplekube-ro/phpipam-sdk-go/phpipam"
 )
 
 // resourceAddressOptionalFields represents all the fields that are optional in
