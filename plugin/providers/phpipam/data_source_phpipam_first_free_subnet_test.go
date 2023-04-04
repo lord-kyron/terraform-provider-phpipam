@@ -19,7 +19,7 @@ data "phpipam_first_free_subnet" "next" {
 }
 `
 
-const testAccDataSourcePHPIPAMFirstFreeAddressNoFreeConfig = `
+const testAccDataSourcePHPIPAMFirstFreeSubnetNoFreeConfig = `
 resource "phpipam_subnet" "subnet" {
   section_id     = 1
   subnet_address = "10.10.3.0"
@@ -50,13 +50,13 @@ data "phpipam_first_free_subnet" "next" {
 }
 `
 
-func TestAccDataSourcePHPIPAMFirstFreeAddress(t *testing.T) {
+func TestAccDataSourcePHPIPAMFirstFreeSubnet(t *testing.T) {
 	resource.Test(t, resource.TestCase{
 		PreCheck:  func() { testAccPreCheck(t) },
 		Providers: testAccProviders,
 		Steps: []resource.TestStep{
 			resource.TestStep{
-				Config: testAccDataSourcePHPIPAMFirstFreeAddressConfig,
+				Config: testAccDataSourcePHPIPAMFirstFreeSubnetConfig,
 				Check: resource.ComposeTestCheckFunc(
 					resource.TestCheckResourceAttr("data.phpipam_first_free_subnet.next", "subnet", "10.10.1.0/26"),
 				),
@@ -65,13 +65,13 @@ func TestAccDataSourcePHPIPAMFirstFreeAddress(t *testing.T) {
 	})
 }
 
-func TestAccDataSourcePHPIPAMFirstFreeAddressNoFree(t *testing.T) {
+func TestAccDataSourcePHPIPAMFirstFreeSubnetNoFree(t *testing.T) {
 	resource.Test(t, resource.TestCase{
 		PreCheck:  func() { testAccPreCheck(t) },
 		Providers: testAccProviders,
 		Steps: []resource.TestStep{
 			resource.TestStep{
-				Config:      testAccDataSourcePHPIPAMFirstFreeAddressNoFreeConfig,
+				Config:      testAccDataSourcePHPIPAMFirstFreeSubnetNoFreeConfig,
 				ExpectError: regexp.MustCompile("Subnet has no free IP addresses"),
 			},
 		},
