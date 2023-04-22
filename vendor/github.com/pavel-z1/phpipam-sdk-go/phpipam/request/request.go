@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"net/http"
+	"os"
 
+	"github.com/apex/log"
+	"github.com/apex/log/handlers/logfmt"
 	"github.com/pavel-z1/phpipam-sdk-go/phpipam/session"
 )
 
@@ -116,7 +118,7 @@ func newRequestResponse(r *http.Response) *requestResponse {
 	}
 	defer r.Body.Close()
 	body, err := ioutil.ReadAll(r.Body)
-	log.Printf("Response Body Debug ................... %s", body)
+	log.Debugf("Response Body Debug ................... %s", body)
 	if err != nil {
 		panic(err)
 	}
@@ -134,6 +136,7 @@ func (r *Request) Send() error {
 	var err error
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: r.Session.Config.Insecure},
+		Proxy:           http.ProxyFromEnvironment,
 	}
 	client := &http.Client{
 		Transport: tr,
@@ -145,12 +148,12 @@ func (r *Request) Send() error {
 	switch r.Method {
 	case "OPTIONS", "GET", "POST", "PUT", "PATCH", "DELETE":
 		bs, err := json.Marshal(r.Input)
-		log.Printf("Request Body Debug ................... %s", bs)
+		log.Debugf("Request Body Debug ................... %s", bs)
 		if err != nil {
 			return fmt.Errorf("Error preparing request data: %s", err)
 		}
 		buf := bytes.NewBuffer(bs)
-		log.Printf("Request URL Debug ...................Method: %s, UR: %s/%s%s", r.Method, r.Session.Config.Endpoint, r.Session.Config.AppID, r.URI)
+		log.Debugf("Request URL Debug ...................Method: %s, UR: %s/%s%s", r.Method, r.Session.Config.Endpoint, r.Session.Config.AppID, r.URI)
 		req, err = http.NewRequest(r.Method, fmt.Sprintf("%s/%s%s", r.Session.Config.Endpoint, r.Session.Config.AppID, r.URI), buf)
 		req.Header.Add("Content-Type", "application/json")
 	default:
@@ -195,8 +198,26 @@ func (r *Request) Send() error {
 
 // NewRequest creates a new request instance with configuration set.
 func NewRequest(s *session.Session) *Request {
+	log.SetLevel(log.InfoLevel)
+	log.SetHandler(logfmt.New(os.Stderr))
+
+	env_loglevel := os.Getenv("PHPIPAMSDK_LOGLEVEL")
+	if env_loglevel != "" {
+		loglevel, err := log.ParseLevel(env_loglevel)
+		if err == nil {
+			log.SetLevel(loglevel)
+		} else {
+			log.Warnf("Invalid log level, defaulting to info: %s", err)
+		}
+	}
+
 	r := &Request{
 		Session: s,
 	}
 	return r
+}
+
+// change logger level, default is info
+func SetLevel(level log.Level) {
+	log.SetLevel(level)
 }

@@ -112,6 +112,14 @@ func (c *Controller) GetAddressesByIP(ipaddr string) (out []Address, err error) 
 	return
 }
 
+// GetAddressesByIP searches for an address by its IP with in given subnet
+// When having multiple subnets with same ip range this will return the address in the given subnet
+// Those subnet may not talk to each other but still exist under on phpIPAM instance especially on ones migrated from previous versions 
+func (c *Controller) GetAddressesByIpInSubnet(ipaddr string,subnetID int) (out Address, err error) {
+	err = c.SendRequest("GET", fmt.Sprintf("/addresses/%s/%d", ipaddr,subnetID), &struct{}{}, &out)
+	return
+}
+
 // GetAddressCustomFieldsSchema GETs the custom fields for the addresses controller via
 // client.GetCustomFieldsSchema.
 func (c *Controller) GetAddressCustomFieldsSchema() (out map[string]phpipam.CustomField, err error) {
