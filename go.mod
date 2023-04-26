@@ -5,7 +5,7 @@ go 1.20
 require (
 	github.com/hashicorp/terraform-plugin-sdk v1.17.2
 	github.com/hashicorp/terraform-plugin-sdk/v2 v2.25.0
-	github.com/pavel-z1/phpipam-sdk-go v0.1.4
+	github.com/pavel-z1/phpipam-sdk-go v0.1.5
 )
 
 require (
