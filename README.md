@@ -624,6 +624,7 @@ The following attributes are exported:
  * `allow_ip_requests` - `true` if the subnet allows IP requests in PHPIPAM.
  * `scan_agent_id` - The ID of the ping scan agent that is used for this subnet.
  * `include_in_ping` - `true` if this subnet is included in ping probes.
+ * `resolve_dns` - `true` if enabled resolving of DNS names.
  * `host_discovery_enabled` - `true` if this subnet is included in new host
    scans.
  * `is_folder` - `true` if this subnet is a folder and not an actual subnet.
@@ -1174,6 +1175,7 @@ The resource takes the following parameters:
    probes.
  * `host_discovery_enabled` (Optional) - `true` if this subnet is included in
    new host scans.
+ * `resolve_dns` (Optional) - `true` if enabled resolving of DNS names.
  * `is_folder` (Optional) - `true` if this subnet is a folder and not an actual
    subnet.
  * `is_full` (Optional) - `true` if the subnet has been marked as full.

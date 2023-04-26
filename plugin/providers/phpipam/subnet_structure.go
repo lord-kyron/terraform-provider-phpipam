@@ -32,6 +32,7 @@ var resourceSubnetOptionalFields = linearSearchSlice{
 	"is_full",
 	"utilization_threshold",
 	"location_id",
+	"resolve_dns",
 }
 
 // bareSubnetSchema returns a map[string]*schema.Schema with the schema used
@@ -98,6 +99,9 @@ func bareSubnetSchema() map[string]*schema.Schema {
 			Type: schema.TypeBool,
 		},
 		"host_discovery_enabled": &schema.Schema{
+			Type: schema.TypeBool,
+		},
+		"resolve_dns": &schema.Schema{
 			Type: schema.TypeBool,
 		},
 		"is_folder": &schema.Schema{
@@ -251,6 +255,7 @@ func expandSubnet(d *schema.ResourceData) subnets.Subnet {
 		Permissions:    d.Get("permissions").(string),
 		DNSRecursive:   phpipam.BoolIntString(d.Get("create_ptr_records").(bool)),
 		DNSRecords:     phpipam.BoolIntString(d.Get("display_hostnames").(bool)),
+		ResolveDNS:     phpipam.BoolIntString(d.Get("resolve_dns").(bool)),
 		AllowRequests:  phpipam.BoolIntString(d.Get("allow_ip_requests").(bool)),
 		ScanAgent:      d.Get("scan_agent_id").(int),
 		PingSubnet:     phpipam.BoolIntString(d.Get("include_in_ping").(bool)),
@@ -286,6 +291,7 @@ func flattenSubnet(s subnets.Subnet, d *schema.ResourceData) {
 	d.Set("permissions", s.Permissions)
 	d.Set("create_ptr_records", s.DNSRecursive)
 	d.Set("display_hostnames", s.DNSRecords)
+	d.Set("resolve_dns", s.ResolveDNS)
 	d.Set("allow_ip_requests", s.AllowRequests)
 	d.Set("scan_agent_id", s.ScanAgent)
 	d.Set("include_in_ping", s.PingSubnet)

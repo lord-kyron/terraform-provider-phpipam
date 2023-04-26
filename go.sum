@@ -419,6 +419,8 @@ github.com/pavel-z1/phpipam-sdk-go v0.1.3 h1:wXQEO9MNQOJI9CzfW0kCkUuVIw8KJHR6KoW
 github.com/pavel-z1/phpipam-sdk-go v0.1.3/go.mod h1:bRGJxGeHzqnA0lEXmXynrKq5pDkIlFCggDL7kq16yTA=
 github.com/pavel-z1/phpipam-sdk-go v0.1.4 h1:Ys0dRed8k44H2m56U3maAd/DRIHNgySYIHfQRwUygr0=
 github.com/pavel-z1/phpipam-sdk-go v0.1.4/go.mod h1:eBzldFEIC56hn++VUDx14CfHF4X93cEE5NDSqdk0hjs=
+github.com/pavel-z1/phpipam-sdk-go v0.1.5 h1:4h+Ws7vbUJCJu23HHHYe9Puf4UZEhQQkVkZWFtoxJak=
+github.com/pavel-z1/phpipam-sdk-go v0.1.5/go.mod h1:eBzldFEIC56hn++VUDx14CfHF4X93cEE5NDSqdk0hjs=
 github.com/pierrec/lz4 v2.0.5+incompatible/go.mod h1:pdkljMzZIN41W+lC3N2tnIh5sFi+IEE17M5jbnwPHcY=
 github.com/pkg/errors v0.8.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
