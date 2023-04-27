@@ -140,6 +140,19 @@ output "address_description" {
 }
 ```
 
+**Example With `subnet_id` when multiple subnets share the same ip ranges :**
+
+```
+data "phpipam_address" "address" {
+  ip_address = "10.10.1.1"
+  subnet_id         = 3
+}
+
+output "address_description" {
+  value = data.phpipam_address.address.description
+}
+```
+
 **Example With `description`:**
 
 ```
@@ -176,7 +189,8 @@ The data source takes the following parameters:
  * `address_id` - The ID of the IP address in the PHPIPAM database.
  * `ip_address` - The actual IP address in PHPIPAM.
  * `subnet_id` - The ID of the subnet that the address resides in. This is
-   required to search on the `description` or `hostname` fields.
+   required to search on the `description` or `hostname` field. Optional if 
+   multiple subnets have the same ip ranges ( multiple subnets behind NAT ) 
  * `description` - The description of the IP address. `subnet_id` is required
    when using this field.
  * `hostname` - The host name of the IP address. `subnet_id` is required when
