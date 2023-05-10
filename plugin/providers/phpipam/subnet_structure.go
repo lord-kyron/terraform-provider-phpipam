@@ -30,6 +30,7 @@ var resourceSubnetOptionalFields = linearSearchSlice{
 	"include_in_ping",
 	"host_discovery_enabled",
 	"is_full",
+	"is_folder",
 	"utilization_threshold",
 	"location_id",
 	"resolve_dns",
