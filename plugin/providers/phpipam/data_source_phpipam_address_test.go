@@ -7,81 +7,138 @@ import (
 )
 
 const testAccDataSourcePHPIPAMAddressConfig = `
+resource "phpipam_section" "test" {
+  name        = "tf-test"
+  description = "Terraform test section"
+}
+
+resource "phpipam_subnet" "subnet" {
+  section_id     = phpipam_section.test.section_id
+  subnet_address = "10.10.3.0"
+  subnet_mask    = 24
+
+  depends_on = [phpipam_section.test]
+}
+
+resource "phpipam_address" "address" {
+  subnet_id   =  phpipam_subnet.subnet.subnet_id
+  ip_address  = "10.10.3.245"
+  description = "Server2"
+  hostname    = "server1.cust1.local"
+
+  depends_on = [phpipam_subnet.subnet]
+}
+
+
 data "phpipam_address" "address_by_address" {
-  ip_address = "10.10.1.245"
+  ip_address = "10.10.3.245"
+  depends_on = [phpipam_address.address]
 }
 
 data "phpipam_address" "address_by_id" {
-  address_id = "${data.phpipam_address.address_by_address.address_id}"
+  address_id = data.phpipam_address.address_by_address.address_id
+  depends_on = [data.phpipam_address.address_by_address]
 }
 
 data "phpipam_address" "address_by_hostname" {
-  subnet_id = 3
+  subnet_id = phpipam_subnet.subnet.subnet_id
   hostname  = "server1.cust1.local"
+  depends_on     = [phpipam_address.address]
 }
 
 data "phpipam_address" "address_by_description" {
-  subnet_id   = 3
+  subnet_id   = phpipam_subnet.subnet.subnet_id
   description = "Server2"
+  depends_on     = [phpipam_address.address]
 }
 `
 
 const testAccDataSourcePHPIPAMAddressCustomFieldConfig = `
+resource "phpipam_section" "test" {
+  name        = "tf-test"
+  description = "Terraform test section"
+}
+
+resource "phpipam_subnet" "subnet" {
+  section_id     = phpipam_section.test.section_id
+  subnet_address = "10.10.3.0"
+  subnet_mask    = 24
+
+  depends_on = [phpipam_section.test]
+}
+
 resource "phpipam_address" "address" {
-  subnet_id   = 3
-  ip_address  = "10.10.1.10"
-  description = "Terraform test address (custom fields)"
-  hostname    = "tf-test.cust1.local"
+  subnet_id   =  phpipam_subnet.subnet.subnet_id
+  ip_address  = "10.10.3.245"
+  description = "Server2"
+  hostname    = "server1.cust1.local"
 
   custom_fields = {
-    CustomTestAddresses  = "terraform-test"
-    CustomTestAddresses2 = "terraform2-test"
+    custom_CustomTestAddresses  = "terraform-test"
+    custom_CustomTestAddresses2 = "terraform2-test"
   }
+  depends_on = [phpipam_subnet.subnet]
+}
+
+
+data "phpipam_address" "address_by_address" {
+  ip_address = "10.10.3.245"
+  depends_on = [phpipam_address.address]
+}
+
+data "phpipam_address" "address_by_id" {
+  address_id = data.phpipam_address.address_by_address.address_id
+  depends_on = [data.phpipam_address.address_by_address]
+}
+
+data "phpipam_address" "address_by_hostname" {
+  subnet_id = phpipam_subnet.subnet.subnet_id
+  hostname  = "server1.cust1.local"
+  depends_on     = [phpipam_address.address]
+}
+
+data "phpipam_address" "address_by_description" {
+  subnet_id   = phpipam_subnet.subnet.subnet_id
+  description = "Server2"
+  depends_on     = [phpipam_address.address]
 }
 
 data "phpipam_address" "custom_search" {
-  subnet_id = "${phpipam_address.address.subnet_id}"
+  subnet_id = phpipam_address.address.subnet_id
 
   custom_field_filter = {
-    CustomTestAddresses  = ".*terraform.*"
-    CustomTestAddresses2 = ".*terraform2.*"
+    custom_CustomTestAddresses  = ".*terraform.*"
   }
 }
 `
 
 func TestAccDataSourcePHPIPAMAddress(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:  func() { testAccPreCheck(t) },
+		PreCheck: func() {
+			testAccPreCheck(t)
+			sectionSweep("tf-test", t)
+		},
 		Providers: testAccProviders,
 		Steps: []resource.TestStep{
 			resource.TestStep{
 				Config: testAccDataSourcePHPIPAMAddressConfig,
 				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("phpipam_section.test", "name", "tf-test"),
 					resource.TestCheckResourceAttrPair("data.phpipam_address.address_by_address", "address_id", "data.phpipam_address.address_by_id", "address_id"),
 					resource.TestCheckResourceAttrPair("data.phpipam_address.address_by_address", "ip_address", "data.phpipam_address.address_by_id", "ip_address"),
-					resource.TestCheckResourceAttr("data.phpipam_address.address_by_address", "description", "Gateway"),
-					resource.TestCheckResourceAttr("data.phpipam_address.address_by_hostname", "ip_address", "10.10.1.3"),
-					resource.TestCheckResourceAttr("data.phpipam_address.address_by_description", "ip_address", "10.10.1.4"),
+					resource.TestCheckResourceAttr("data.phpipam_address.address_by_address", "description", "Server2"),
+					resource.TestCheckResourceAttr("data.phpipam_address.address_by_hostname", "ip_address", "10.10.3.245"),
+					resource.TestCheckResourceAttr("data.phpipam_address.address_by_description", "ip_address", "10.10.3.245"),
 				),
 			},
-		},
-	})
-}
-
-func TestAccDataSourcePHPIPAMAddress_CustomField(t *testing.T) {
-	resource.Test(t, resource.TestCase{
-		PreCheck:  func() { testAccPreCheck(t) },
-		Providers: testAccProviders,
-		Steps: []resource.TestStep{
 			resource.TestStep{
 				Config: testAccDataSourcePHPIPAMAddressCustomFieldConfig,
 				Check: resource.ComposeTestCheckFunc(
-					resource.TestCheckResourceAttr("data.phpipam_address.custom_search", "subnet_id", "3"),
-					resource.TestCheckResourceAttr("data.phpipam_address.custom_search", "ip_address", "10.10.1.10"),
-					resource.TestCheckResourceAttr("data.phpipam_address.custom_search", "description", "Terraform test address (custom fields)"),
-					resource.TestCheckResourceAttr("data.phpipam_address.custom_search", "hostname", "tf-test.cust1.local"),
-					resource.TestCheckResourceAttr("data.phpipam_address.custom_search", "custom_fields.CustomTestAddresses", "terraform-test"),
-					resource.TestCheckResourceAttr("data.phpipam_address.custom_search", "custom_fields.CustomTestAddresses2", "terraform2-test"),
+					resource.TestCheckResourceAttr("data.phpipam_address.custom_search", "ip_address", "10.10.3.245"),
+					resource.TestCheckResourceAttr("data.phpipam_address.custom_search", "description", "Server2"),
+					resource.TestCheckResourceAttr("data.phpipam_address.custom_search", "hostname", "server1.cust1.local"),
+					resource.TestCheckResourceAttr("data.phpipam_address.custom_search", "custom_fields.custom_CustomTestAddresses", "terraform-test"),
+					resource.TestCheckResourceAttr("data.phpipam_address.custom_search", "custom_fields.custom_CustomTestAddresses2", "terraform2-test"),
 				),
 			},
 		},

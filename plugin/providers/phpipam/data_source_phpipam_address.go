@@ -37,9 +37,9 @@ func dataSourcePHPIPAMAddressRead(d *schema.ResourceData, meta interface{}) erro
 			}
 			return err
 		}
-	
+
 	case d.Get("ip_address").(string) != "" && d.Get("subnet_id").(int) != 0:
-		 out[0], err = c.GetAddressesByIpInSubnet(d.Get("ip_address").(string), d.Get("subnet_id").(int))
+		out[0], err = c.GetAddressesByIpInSubnet(d.Get("ip_address").(string), d.Get("subnet_id").(int))
 		if err != nil {
 			if strings.Contains(err.Error(), "Address not found") {
 				log.Printf("[DEBUG] Invalid IP address Seen with IPAddress: " + d.Get("ip_address").(string) + " and SubnetID: " + strconv.Itoa(d.Get("subnet_id").(int)))
@@ -84,17 +84,31 @@ func dataSourcePHPIPAMAddressRead(d *schema.ResourceData, meta interface{}) erro
 	if len(out) != 1 {
 		return errors.New("Your search returned zero or multiple results. Please correct your search and try again")
 	}
-	flattenAddress(out[0], d)
-	if len(d.Get("custom_fields").(map[string]interface{})) != 0 {
+
+	if checkAddresssesCustomFiledsExists(d, c) {
 		fields, err := c.GetAddressCustomFields(out[0].ID)
-		if err != nil {
-			return err
-		}
-		trimMap(fields)
-		if err := d.Set("custom_fields", fields); err != nil {
+		switch {
+		case err == nil:
+			trimMap(fields)
+			if err := d.Set("custom_fields", fields); err != nil {
+				return err
+			}
+		case err != nil:
 			return err
 		}
 	}
 
+	flattenAddress(out[0], d)
+
 	return nil
+}
+
+func checkAddresssesCustomFiledsExists(d *schema.ResourceData, client *addresses.Controller) bool {
+	if _, ok := d.GetOk("custom_field_filter"); ok {
+		return true
+	} else if _, err := client.GetAddressCustomFieldsSchema(); err == nil {
+		return true
+	} else {
+		return false
+	}
 }

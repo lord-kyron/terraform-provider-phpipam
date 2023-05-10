@@ -19,28 +19,104 @@ and IP addresses, entirely within Terraform.
 [3]: https://phpipam.net/api/api_documentation/
 [4]: https://github.com/pavel-z1/phpipam-sdk-go
 
-## Installing
+## Building
 
+The provider's executable files are hosted on the [Terraform Repository][8] and are 
+ready to use without additional assembly.
 See the [Plugin Basics][5] page of the Terraform docs to see how to plunk this
 into your config. Check the [releases page][6] of this repo to get releases for
 Linux, OS X, and Windows.
 
 [5]: https://www.terraform.io/docs/plugins/basics.html
 [6]: https://github.com/lord-kyron/terraform-provider-phpipam/releases
+[8]: https://registry.terraform.io/providers/lord-kyron/phpipam/latest
 
-Examle for CentOS 7:
+How to build providerExamle for Rocky Linux 8:
 Build from repo:
 ```
-yum install golang git
-mkdir -p $HOME/development/terraform-providers/
+sudo yum install golang git
+sudo mkdir -p $HOME/development/terraform-providers/
 cd $HOME/development/terraform-providers/
 git clone https://github.com/lord-kyron/terraform-provider-phpipam
 # In some cases need execute go install twice
 go install
 go build
-cp terraform-provider-phpipam ~/.terraform.d/plugins/
+cp terraform-provider-phpipam ~/.terraform.d/plugins/local.dev/phpipam/{version}/{os_platform}/
 ```
 
+## Unit tests
+
+Requirements:
+1. Ready for usage phpIPAM instance
+2. Created Custom fields for IP address, subnets, vlans objects inside phpIPAM
+   should be created ext custom fields:
+   Custom IP addresses fields:
+     - CustomTestAddresses varchar(30)
+     - CustomTestAddresses2 varchar(30)
+   Custom Subnets fields:
+     - CustomTestSubnets varchar(30)
+     - CustomTestSubnets2 varchar(30)
+   Custom VLAN fields:
+     - CustomTestVLANs varchar(30)
+3. Exported environment variable with phpIPAM credentials. Example:
+```
+export PHPIPAM_APP_ID="terraform"
+export PHPIPAM_ENDPOINT_ADDR="http://10.10.0.1/api"
+export PHPIPAM_PASSWORD="password"
+export PHPIPAM_USER_NAME="Admin"
+```
+
+To start unit test exec next command:
+```
+make testacc
+```
+
+Example unit test results:
+```
+go clean -testcache; TF_ACC=1 go test -v ./plugin/providers/phpipam -run="TestAcc"
+=== RUN   TestAccDataSourcePHPIPAMAddress
+--- PASS: TestAccDataSourcePHPIPAMAddress (3.00s)
+=== RUN   TestAccDataSourcePHPIPAMAddresses
+--- PASS: TestAccDataSourcePHPIPAMAddresses (3.71s)
+=== RUN   TestAccDataSourcePHPIPAMFirstFreeAddress
+--- PASS: TestAccDataSourcePHPIPAMFirstFreeAddress (1.52s)
+=== RUN   TestAccDataSourcePHPIPAMFirstFreeAddressNoFree
+--- PASS: TestAccDataSourcePHPIPAMFirstFreeAddressNoFree (0.79s)
+=== RUN   TestAccDataSourcePHPIPAMFirstFreeSubnet
+--- PASS: TestAccDataSourcePHPIPAMFirstFreeSubnet (1.30s)
+=== RUN   TestAccDataSourcePHPIPAMFirstFreeSubnetNoFree
+--- PASS: TestAccDataSourcePHPIPAMFirstFreeSubnetNoFree (0.69s)
+=== RUN   TestAccDataSourcePHPIPAML2Domain
+--- PASS: TestAccDataSourcePHPIPAML2Domain (1.01s)
+=== RUN   TestAccDataSourcePHPIPAMSection
+--- PASS: TestAccDataSourcePHPIPAMSection (1.27s)
+=== RUN   TestAccDataSourcePHPIPAMSubnet
+--- PASS: TestAccDataSourcePHPIPAMSubnet (1.62s)
+=== RUN   TestAccDataSourcePHPIPAMSubnet_CustomFields
+--- PASS: TestAccDataSourcePHPIPAMSubnet_CustomFields (1.50s)
+=== RUN   TestAccDataSourcePHPIPAMSubnets
+--- PASS: TestAccDataSourcePHPIPAMSubnets (2.57s)
+=== RUN   TestAccDataSourcePHPIPAMVLAN
+--- PASS: TestAccDataSourcePHPIPAMVLAN (1.07s)
+=== RUN   TestAccResourcePHPIPAMAddress
+--- PASS: TestAccResourcePHPIPAMAddress (1.25s)
+=== RUN   TestAccResourcePHPIPAMOptionalAddress
+--- PASS: TestAccResourcePHPIPAMOptionalAddress (1.42s)
+=== RUN   TestAccResourcePHPIPAMAddress_CustomFields
+--- PASS: TestAccResourcePHPIPAMAddress_CustomFields (2.26s)
+=== RUN   TestAccResourcePHPIPAML2Domain
+--- PASS: TestAccResourcePHPIPAML2Domain (1.12s)
+=== RUN   TestAccResourcePHPIPAMSection
+--- PASS: TestAccResourcePHPIPAMSection (1.06s)
+=== RUN   TestAccResourcePHPIPAMSubnet
+--- PASS: TestAccResourcePHPIPAMSubnet (1.11s)
+=== RUN   TestAccResourcePHPIPAMSubnet_CustomFields
+--- PASS: TestAccResourcePHPIPAMSubnet_CustomFields (1.95s)
+=== RUN   TestAccResourcePHPIPAMVLAN
+--- PASS: TestAccResourcePHPIPAMVLAN (1.27s)
+PASS
+ok  	github.com/lord-kyron/terraform-provider-phpipam/plugin/providers/phpipam	31.522s
+```
 
 ## Usage
 
@@ -158,7 +234,7 @@ output "address_description" {
 ```
 data "phpipam_address" "address" {
   subnet_id         = 3
-  description_match = "Customer 1"
+  description = "Customer 1"
 }
 
 output "address_description" {
@@ -173,7 +249,7 @@ data "phpipam_address" "address" {
   subnet_id = 3
 
   custom_field_filter {
-    CustomTestAddresses = ".*terraform.*"
+    custom_CustomTestAddresses = ".*terraform.*"
   }
 }
 
@@ -207,7 +283,8 @@ source.
 
 ⚠️  **NOTE:** An empty or unspecified `custom_field_filter` value is the
 equivalent to a regular expression that matches everything, and hence will
-return the first address it sees in the subnet.
+return the first address it sees in the subnet. Custom fileds must contain mandatory
+prefix `custom_`.
 
 Arguments are processed in the following order of precedence:
 
@@ -262,7 +339,7 @@ data "phpipam_addresses" "address_search" {
   subnet_id = 3
 
   custom_field_filter {
-    CustomTestAddresses = ".*terraform.*"
+    custom_CustomTestAddresses = ".*terraform.*"
   }
 }
 
@@ -297,6 +374,7 @@ One of the following fields is required alongside `subnet_id`:
 ⚠️  **NOTE:** An empty or unspecified `custom_field_filter` value is the
 equivalent to a regular expression that matches everything, and hence will
 return **all** addresses that contain the referenced custom field key!
+Custom fileds must contain mandatory prefix `custom_`.
 
 ##### Attribute Reference
 
@@ -525,7 +603,7 @@ data "phpipam_subnet" "subnet" {
   section_id = 1
 
   custom_field_filter = {
-    CustomTestSubnets = ".*terraform.*"
+    custom_CustomTestSubnets = ".*terraform.*"
   }
 }
 
@@ -595,7 +673,8 @@ The data source takes the following parameters:
 Conversely, the resource fails if it somehow finds multiple results on a CIDR
 (subnet and mask) search - this is to assert that you are getting the subnet you
 requested. If you want to return multiple results, combine this data source with
-the `phpipam_subnets` data source.
+the `phpipam_subnets` data source. Custom fileds must contain mandatory prefix
+`custom_`
 
 ⚠️  **NOTE:** An empty or unspecified `custom_field_filter` value is the
 equivalent to a regular expression that matches everything, and hence will
@@ -669,7 +748,7 @@ data "phpipam_subnets" "subnet_search" {
   subnet_id = 3
 
   custom_field_filter {
-    CustomTestSubnets = ".*terraform.*"
+    custom_CustomTestSubnets = ".*terraform.*"
   }
 }
 
@@ -709,6 +788,7 @@ You can find documentation for the regular expression syntax used with the
 ⚠️  **NOTE:** An empty or unspecified `custom_field_filter` value is the
 equivalent to a regular expression that matches everything, and hence will
 return **all** subnets that contain the referenced custom field key!
+Custom fileds must contain mandatory prefix `custom_`.
 
 ##### Attribute Reference
 
@@ -776,6 +856,7 @@ The `phpipam_address` resource manages an IP address in PHPIPAM. You can use it
 to create IP address reservations for IP addresses that have been created by
 other Terraform resources, or supplied by the `phpipam_first_free_address` data
 source. An example usage is below.
+Custom fileds must contain mandatory prefix `custom_`.
 
 ⚠️  **NOTE:** If you are using the `phpipam_first_free_address` to get the first
 free IP address in a specific subnet, make sure you set `subnet_id` and
@@ -807,7 +888,7 @@ resource "phpipam_address" "newip" {
   description = "Managed by Terraform"
 
   custom_fields = {
-    CustomTestAddresses = "terraform-test"
+    custom_CustomTestAddresses = "terraform-test"
   }
 
   lifecycle {
@@ -855,6 +936,7 @@ all fields set to optional when using this plugin. For more info see
 [here](https://github.com/phpipam/phpipam/issues/1073). Further to this, either
 ensure that your fields also do not have default values, or ensure the default
 is set in your TF configuration. Diff loops may happen otherwise!
+Custom fileds must contain mandatory prefix `custom_`.
 
 ##### Attribute Reference
 
@@ -1151,7 +1233,7 @@ resource "phpipam_subnet" "subnet" {
   subnet_mask    = 24
 
   custom_fields = {
-    CustomTestSubnets = "terraform-test"
+    custom_CustomTestSubnets = "terraform-test"
   }
 }
 ```
@@ -1206,6 +1288,7 @@ all fields set to optional when using this plugin. For more info see
 [here](https://github.com/phpipam/phpipam/issues/1073). Further to this, either
 ensure that your fields also do not have default values, or ensure the default
 is set in your TF configuration. Diff loops may happen otherwise!
+Custom fileds must contain mandatory prefix `custom_`.
 
 ##### Attribute Reference
 
@@ -1232,7 +1315,7 @@ resource "phpipam_vlan" "vlan" {
   description = "Managed by Terraform"
 
   custom_fields = {
-    CustomTestVLANs = "terraform-test"
+    custom_CustomTestVLANs = "terraform-test"
   }
 }
 ```

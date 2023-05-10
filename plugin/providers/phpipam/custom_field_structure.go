@@ -98,11 +98,6 @@ func updateCustomFields(d *schema.ResourceData, client interface{}) error {
 	customFields := make(map[string]interface{})
 	log.Printf("Defined custom fields ...............%s", customFields)
 
-	// If no custom_fields defined - stop sub
-	if len(d.Get("custom_fields").(map[string]interface{})) == 0 {
-		return nil
-	}
-
 	if m, ok := d.GetOk("custom_fields"); ok {
 		customFields = m.(map[string]interface{})
 	}

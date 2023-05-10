@@ -2,7 +2,7 @@ test:
 	go test -v $(shell go list ./... | grep -v /vendor/) 
 
 testacc:
-	TF_ACC=1 go test -v ./plugin/providers/phpipam -run="TestAcc"
+	go clean -testcache; TF_ACC=1 go test -v ./plugin/providers/phpipam -run="TestAcc"
 
 build: deps
 	gox -osarch="linux/amd64 windows/amd64 darwin/amd64 darwin/arm64" \

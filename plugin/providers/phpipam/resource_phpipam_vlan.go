@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/pavel-z1/phpipam-sdk-go/controllers/vlans"
 )
 
 // resourcePHPIPAMVLAN returns the resource structure for the phpipam_vlan
@@ -33,6 +34,17 @@ func resourcePHPIPAMVLANCreate(d *schema.ResourceData, meta interface{}) error {
 	// Assert the ID field here is empty. If this is not empty the request will fail.
 	in.ID = 0
 
+	var check_vlans []vlans.VLAN
+	switch {
+	case in.Number != 0 && in.DomainID != 0:
+		check_vlans, _ = c.GetVLANsByNumberAndDomainID(in.Number, in.DomainID)
+	case in.Number != 0:
+		check_vlans, _ = c.GetVLANsByNumber(in.Number)
+	}
+	if len(check_vlans) != 0 {
+		return fmt.Errorf("VLAN with number: %d and l2_domain_id: %d already exists. Can't create VLAN", in.Number, in.DomainID)
+	}
+
 	if _, err := c.CreateVLAN(in); err != nil {
 		return err
 	}
@@ -40,7 +52,15 @@ func resourcePHPIPAMVLANCreate(d *schema.ResourceData, meta interface{}) error {
 	// If we have custom fields, set them now. We need to get the IP address's ID
 	// beforehand.
 	if customFields, ok := d.GetOk("custom_fields"); ok {
-		vlans, err := c.GetVLANsByNumber(in.Number)
+		var vlans []vlans.VLAN
+		var err error
+		switch {
+		case in.Number != 0 && in.DomainID != 0:
+			vlans, err = c.GetVLANsByNumberAndDomainID(in.Number, in.DomainID)
+		case in.Number != 0:
+			vlans, err = c.GetVLANsByNumber(in.Number)
+		}
+
 		if err != nil {
 			return fmt.Errorf("Could not read VLAN after creating: %s", err)
 		}

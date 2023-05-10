@@ -63,19 +63,31 @@ func dataSourcePHPIPAMSubnetRead(d *schema.ResourceData, meta interface{}) error
 	if len(out) != 1 {
 		return errors.New("Your search returned zero or multiple results. Please correct your search and try again")
 	}
-	flattenSubnet(out[0], d)
-	if len(d.Get("custom_fields").(map[string]interface{})) != 0 {
-		//flattenSubnet(out[0], d)
-		fields, err := c.GetSubnetCustomFields(out[0].ID)
-		if err != nil {
-			return err
-		}
 
-		trimMap(fields)
-		if err := d.Set("custom_fields", fields); err != nil {
+	if checkSubnetsCustomFiledsExists(d, c) {
+		fields, err := c.GetSubnetCustomFields(out[0].ID)
+		switch {
+		case err == nil:
+			trimMap(fields)
+			if err := d.Set("custom_fields", fields); err != nil {
+				return err
+			}
+		case err != nil:
 			return err
 		}
 	}
 
+	flattenSubnet(out[0], d)
+
 	return nil
+}
+
+func checkSubnetsCustomFiledsExists(d *schema.ResourceData, client *subnets.Controller) bool {
+	if _, ok := d.GetOk("custom_field_filter"); ok {
+		return true
+	} else if _, err := client.GetSubnetCustomFieldsSchema(); err == nil {
+		return true
+	} else {
+		return false
+	}
 }

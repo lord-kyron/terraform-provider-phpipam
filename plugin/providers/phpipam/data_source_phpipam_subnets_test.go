@@ -8,7 +8,7 @@ import (
 
 const testAccDataSourcePHPIPAMSubnetsConfigStage1 = `
 variable "subnet_addresses" {
-  type = "list"
+  type = list
 
   default = [
     "10.10.3.0/24",
@@ -17,60 +17,68 @@ variable "subnet_addresses" {
   ]
 }
 
+resource "phpipam_section" "section" {
+  name        = "tf-test"
+  description = "Terraform test section"
+}
+
 resource "phpipam_subnet" "subnets" {
-  count          = "${length(var.subnet_addresses)}"
-  section_id     = 1
-  subnet_address = "${element(split("/", element(var.subnet_addresses, count.index)), 0)}"
-  subnet_mask    = "${element(split("/", element(var.subnet_addresses, count.index)), 1)}"
+  count          = length(var.subnet_addresses)
+  section_id     = phpipam_section.section.section_id
+  subnet_address = element(split("/", element(var.subnet_addresses, count.index)), 0)
+  subnet_mask    = element(split("/", element(var.subnet_addresses, count.index)), 1)
   description    = "Terraform test subnet (multiple subnet data source)"
 
   custom_fields = {
-    CustomTestSubnets  = "terraform-test-multiple"
-    CustomTestSubnets2 = "Entry ${var.subnet_addresses[count.index]}"
+    custom_CustomTestSubnets  = "terraform-test-multiple"
+    custom_CustomTestSubnets2 = "Entry ${var.subnet_addresses[count.index]}"
   }
 }
 `
 
 const testAccDataSourcePHPIPAMSubnetsConfigStage2 = testAccDataSourcePHPIPAMSubnetsConfigStage1 + `
 data "phpipam_subnets" "subnets_by_description" {
-  section_id  = 1
+  section_id  = phpipam_section.section.section_id
   description = "Terraform test subnet (multiple subnet data source)"
 }
 
 data "phpipam_subnets" "subnets_by_description_match" {
-  section_id        = 1
+  section_id        = phpipam_section.section.section_id
   description_match = ".*(multiple subnet data source).*"
 }
 
 data "phpipam_subnets" "subnets_by_custom_fields" {
-  section_id = 1
+  section_id = phpipam_section.section.section_id
 
   custom_field_filter = {
-    CustomTestSubnets  = "terraform-test-multiple"
-    CustomTestSubnets2 = "^Entry [0-9]"
+    custom_CustomTestSubnets  = "terraform-test-multiple"
+    custom_CustomTestSubnets2 = "^Entry [0-9]"
   }
 }
 
 output "expected_subnet_ids" {
-  value = ["${phpipam_subnet.subnets.*.id}"]
+  value = phpipam_subnet.subnets[*].subnet_id
 }
 
 output "actual_subnet_ids_description" {
-  value = "${data.phpipam_subnets.subnets_by_description.subnet_ids}"
+  value = data.phpipam_subnets.subnets_by_description.subnet_ids
 }
 
 output "actual_subnet_ids_description_match" {
-  value = "${data.phpipam_subnets.subnets_by_description_match.subnet_ids}"
+  value = data.phpipam_subnets.subnets_by_description_match.subnet_ids
 }
 
 output "actual_subnet_ids_custom_fields" {
-  value = "${data.phpipam_subnets.subnets_by_custom_fields.subnet_ids}"
+  value = data.phpipam_subnets.subnets_by_custom_fields.subnet_ids
 }
 `
 
 func TestAccDataSourcePHPIPAMSubnets(t *testing.T) {
 	resource.Test(t, resource.TestCase{
-		PreCheck:  func() { testAccPreCheck(t) },
+		PreCheck: func() {
+			testAccPreCheck(t)
+			sectionSweep("tf-test", t)
+		},
 		Providers: testAccProviders,
 		Steps: []resource.TestStep{
 			resource.TestStep{
