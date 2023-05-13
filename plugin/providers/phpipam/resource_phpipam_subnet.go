@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/pavel-z1/phpipam-sdk-go/controllers/subnets"
 )
 
 // resourcePHPIPAMSubnet returns the resource structure for the phpipam_subnet
@@ -57,7 +58,14 @@ func resourcePHPIPAMSubnetCreate(d *schema.ResourceData, meta interface{}) error
 	// If we have custom fields, set them now. We need to get the subnet's ID
 	// beforehand.
 	if customFields, ok := d.GetOk("custom_fields"); ok {
-		subnets, err := c.GetSubnetsByCIDR(fmt.Sprintf("%s/%d", in.SubnetAddress, in.Mask))
+		var subnets []subnets.Subnet
+		var err error
+		switch {
+		case in.SectionID != 0:
+			subnets, err = c.GetSubnetsByCIDRAndSection(fmt.Sprintf("%s/%d", in.SubnetAddress, in.Mask), in.SectionID)
+		default:
+			subnets, err = c.GetSubnetsByCIDR(fmt.Sprintf("%s/%d", in.SubnetAddress, in.Mask))
+		}
 		if err != nil {
 			return fmt.Errorf("Could not read subnet after creating: %s", err)
 		}
@@ -89,10 +97,8 @@ func resourcePHPIPAMSubnetUpdate(d *schema.ResourceData, meta interface{}) error
 		return err
 	}
 
-	if len(d.Get("custom_fields").(map[string]interface{})) != 0 {
-		if err := updateCustomFields(d, c); err != nil {
-			return err
-		}
+	if err := updateCustomFields(d, c); err != nil {
+		return err
 	}
 
 	return dataSourcePHPIPAMSubnetRead(d, meta)

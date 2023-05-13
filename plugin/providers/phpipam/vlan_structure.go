@@ -86,6 +86,10 @@ func dataSourceVLANSchema() map[string]*schema.Schema {
 			v.Optional = true
 			v.Computed = true
 			v.ConflictsWith = []string{"vlan_id"}
+		case "l2_domain_id":
+			v.Optional = true
+			v.Computed = true
+			v.ConflictsWith = []string{"vlan_id"}
 		default:
 			v.Computed = true
 		}

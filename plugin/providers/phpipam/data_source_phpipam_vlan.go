@@ -26,6 +26,16 @@ func dataSourcePHPIPAMVLANRead(d *schema.ResourceData, meta interface{}) error {
 		if err != nil {
 			return err
 		}
+	case d.Get("number").(int) != 0 && d.Get("l2_domain_id").(int) != 0:
+		v, err := c.GetVLANsByNumberAndDomainID(d.Get("number").(int), d.Get("l2_domain_id").(int))
+		if err != nil {
+			return err
+		}
+		// Only one result should be returned by this search. Fail on multiples.
+		if len(v) != 1 {
+			return errors.New("VLAN search returned either zero or multiple results. Please correct your search and try again")
+		}
+		out = v[0]
 	case d.Get("number").(int) != 0:
 		v, err := c.GetVLANsByNumber(d.Get("number").(int))
 		if err != nil {
@@ -39,6 +49,18 @@ func dataSourcePHPIPAMVLANRead(d *schema.ResourceData, meta interface{}) error {
 	default:
 		return errors.New("vlan_id or number not defined, cannot proceed with reading data")
 	}
+
+	fields, err := c.GetVLANCustomFields(out.ID)
+	switch {
+	case err == nil:
+		trimMap(fields)
+		if err := d.Set("custom_fields", fields); err != nil {
+			return err
+		}
+	case err != nil:
+		return err
+	}
+
 	flattenVLAN(out, d)
 	return nil
 }

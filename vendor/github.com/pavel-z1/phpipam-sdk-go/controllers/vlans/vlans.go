@@ -75,6 +75,11 @@ func (c *Controller) GetVLANsByNumber(id int) (out []VLAN, err error) {
 	return
 }
 
+func (c *Controller) GetVLANsByNumberAndDomainID(vlan_id int, domain_id int) (out []VLAN, err error) {
+        err = c.SendRequest("GET", fmt.Sprintf("/vlans/search/%d/?filter_by=domainId&filter_value=%d", vlan_id, domain_id), &struct{}{}, &out)
+        return
+}
+
 // GetVLANCustomFieldsSchema GETs the custom fields for the vlans controller via
 // client.GetCustomFieldsSchema.
 func (c *Controller) GetVLANCustomFieldsSchema() (out map[string]phpipam.CustomField, err error) {

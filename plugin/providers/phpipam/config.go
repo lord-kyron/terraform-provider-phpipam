@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/pavel-z1/phpipam-sdk-go/controllers/addresses"
+	"github.com/pavel-z1/phpipam-sdk-go/controllers/l2domains"
 	"github.com/pavel-z1/phpipam-sdk-go/controllers/sections"
 	"github.com/pavel-z1/phpipam-sdk-go/controllers/subnets"
 	"github.com/pavel-z1/phpipam-sdk-go/controllers/vlans"
@@ -45,6 +46,9 @@ type ProviderPHPIPAMClient struct {
 	// The client for the sections controller.
 	sectionsController *sections.Controller
 
+	// The client for the l2domains controller.
+	l2domainsController *l2domains.Controller
+
 	// The client for the subnets controller.
 	subnetsController *subnets.Controller
 
@@ -71,6 +75,7 @@ func (c *Config) Client() (interface{}, error) {
 	client := ProviderPHPIPAMClient{
 		addressesController: addresses.NewController(sess),
 		sectionsController:  sections.NewController(sess),
+		l2domainsController: l2domains.NewController(sess),
 		subnetsController:   subnets.NewController(sess),
 		vlansController:     vlans.NewController(sess),
 	}

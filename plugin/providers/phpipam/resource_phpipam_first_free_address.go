@@ -141,7 +141,7 @@ func resourcePHPIPAMFirstFreeAddressCreate(d *schema.ResourceData, meta interfac
 		if len(addrs) != 1 {
 			return errors.New("IP address either missing or multiple results returned by reading IP after creation")
 		}
-		
+
 		d.SetId(strconv.Itoa(addrs[0].ID))
 
 		if _, err := c.UpdateAddressCustomFields(addrs[0].ID, customFields.(map[string]interface{})); err != nil {
