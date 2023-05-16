@@ -1,3 +1,14 @@
+## 1.5.0
+ * added posibility to create Vlan with the same number id different l2_domains
+ * added posibility to create Subnet with the same CIDR in different Sections
+ * fixed read subnet data resource with section_id, subnet_address and subnet_mask parameters
+ * created terraform resource and data packages for l2domains controller
+ * fixed modules dependencies that will allow to run make testacc command
+ * fixed custom field read for data sources (subnet, address, vlan)
+ * fixed clean up custom field during resource update
+ * refactored Unit tests
+ * Applied fix for [issue #66](https://github.com/lord-kyron/terraform-provider-phpipam/issues/66)
+ * Applied fix for [issue #67](https://github.com/lord-kyron/terraform-provider-phpipam/issues/67)
 ## 1.4.0
  * Updated vendor repos
  * Merged updated phpipam sdk from [pull request #63](https://github.com/lord-kyron/terraform-provider-phpipam/pull/63)
