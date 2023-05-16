@@ -50,17 +50,29 @@ func dataSourcePHPIPAMVLANRead(d *schema.ResourceData, meta interface{}) error {
 		return errors.New("vlan_id or number not defined, cannot proceed with reading data")
 	}
 
-	fields, err := c.GetVLANCustomFields(out.ID)
-	switch {
-	case err == nil:
-		trimMap(fields)
-		if err := d.Set("custom_fields", fields); err != nil {
+	if checkVlansCustomFiledsExists(d, c) {
+		fields, err := c.GetVLANCustomFields(out.ID)
+		switch {
+		case err == nil:
+			trimMap(fields)
+			if err := d.Set("custom_fields", fields); err != nil {
+				return err
+			}
+		case err != nil:
 			return err
 		}
-	case err != nil:
-		return err
 	}
 
 	flattenVLAN(out, d)
 	return nil
+}
+
+func checkVlansCustomFiledsExists(d *schema.ResourceData, client *vlans.Controller) bool {
+	if _, ok := d.GetOk("custom_field_filter"); ok {
+		return true
+	} else if _, err := client.GetVLANCustomFieldsSchema(); err == nil {
+		return true
+	} else {
+		return false
+	}
 }
