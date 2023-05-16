@@ -146,24 +146,22 @@ func (r *Request) Send() error {
 	}
 
 	switch r.Method {
-	case "OPTIONS", "GET", "POST", "PUT", "PATCH", "DELETE":
-		if r.Input != nil {
-			bs, err := json.Marshal(r.Input)
-			log.Debugf("Request Body Debug ................... %s", bs)
-			if err != nil {
-				return fmt.Errorf("Error preparing request data: %s", err)
-			}
-			buf := bytes.NewBuffer(bs)
-			req, err = http.NewRequest(r.Method, fmt.Sprintf("%s/%s%s", r.Session.Config.Endpoint, r.Session.Config.AppID, r.URI), buf)
-		} else {
-			req, err = http.NewRequest(r.Method, fmt.Sprintf("%s/%s%s", r.Session.Config.Endpoint, r.Session.Config.AppID, r.URI), nil)
+	case "OPTIONS", "POST", "PUT", "PATCH", "DELETE":
+		bs, err := json.Marshal(r.Input)
+		log.Debugf("Request Body Debug ................... %s", bs)
+		if err != nil {
+			return fmt.Errorf("Error preparing request data: %s", err)
 		}
-
+		buf := bytes.NewBuffer(bs)
+		req, err = http.NewRequest(r.Method, fmt.Sprintf("%s/%s%s", r.Session.Config.Endpoint, r.Session.Config.AppID, r.URI), buf)
 		req.Header.Add("Content-Type", "application/json")
-		log.Debugf("Request URL Debug ...................Method: %s, UR: %s/%s%s", r.Method, r.Session.Config.Endpoint, r.Session.Config.AppID, r.URI)
+	case "GET":
+		req, err = http.NewRequest(r.Method, fmt.Sprintf("%s/%s%s", r.Session.Config.Endpoint, r.Session.Config.AppID, r.URI), nil)
+
 	default:
 		return fmt.Errorf("API request method %s not supported by PHPIPAM", r.Method)
 	}
+	log.Debugf("Request URL Debug ...................Method: %s, UR: %s/%s%s", r.Method, r.Session.Config.Endpoint, r.Session.Config.AppID, r.URI)
 
 	if err != nil {
 		panic(err)
