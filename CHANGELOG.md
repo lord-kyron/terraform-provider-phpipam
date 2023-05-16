@@ -1,3 +1,7 @@
+## 1.5.2
+ * Fix error for vlans where custom field not defined 
+## 1.5.1
+ *  Added missing GET request fix.
 ## 1.5.0
  * added posibility to create Vlan with the same number id different l2_domains
  * added posibility to create Subnet with the same CIDR in different Sections
