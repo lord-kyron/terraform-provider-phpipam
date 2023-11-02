@@ -116,7 +116,7 @@ func updateCustomFields(d *schema.ResourceData, client interface{}) error {
 		panic(fmt.Errorf("Invalid client type passed %#v - this is a bug", client))
 	}
 	if err != nil {
-		if strings.Contains(err.Error(), "404") && len(customFields) == 0 {
+		if len(customFields) == 0 && (strings.Contains(err.Error(), "404") || (strings.Contains(err.Error(), "200") && strings.Contains(err.Error(), "No custom fields defined"))) {
 			return nil
 		} else {
 			return fmt.Errorf("Error getting custom fields for updating: %s", err)
