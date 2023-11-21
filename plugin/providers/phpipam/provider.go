@@ -82,7 +82,7 @@ func init() {
 		"username": "The username of the PHPIPAM account",
 		"insecure": "Whether server should be accessed " +
 			"without verifying the TLS certificate.",
-		"verify_connection": "Whether the check connection to" +
+		"verify_connection": "Whether to check connection to" +
 			"PHPIPAM API during provider initialization.",
 	}
 }
