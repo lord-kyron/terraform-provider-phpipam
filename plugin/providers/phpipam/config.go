@@ -34,6 +34,9 @@ type Config struct {
 
 	// Allow connect to HTTPS without SSL issuer validation
 	Insecure bool
+
+	// Whether to verify connection to PHPIPAM during provider initialization
+	VerifyConnection bool
 }
 
 // ProviderPHPIPAMClient is a structure that contains the client connections
@@ -81,8 +84,10 @@ func (c *Config) Client() (interface{}, error) {
 	}
 
 	// Validate that our conneciton is okay
-	if err := c.ValidateConnection(client.sectionsController); err != nil {
-		return nil, err
+	if c.VerifyConnection {
+		if err := c.ValidateConnection(client.sectionsController); err != nil {
+			return nil, err
+		}
 	}
 
 	return &client, nil

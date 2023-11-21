@@ -70,6 +70,17 @@ resource "phpipam_address" "newip" {
 }
 ```
 
+When the provider is initialized, the "sections" API is called to ensure the
+connection to PHPIPAM works as expected.
+To disable this, set the `verify_connection` parameter to false:
+```
+provider "phpipam" {
+  ...
+  verify_connection = false
+  ...
+}
+```
+
 ### Data Sources
 
 - [`phpipam_address`](./data-sources/address.md)

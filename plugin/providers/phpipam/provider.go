@@ -38,6 +38,12 @@ func Provider() *schema.Provider {
 				Default:     false,
 				Description: descriptions["insecure"],
 			},
+			"verify_connection": {
+				Type:        schema.TypeBool,
+				Optional:    true,
+				Default:     false,
+				Description: descriptions["verify_connection"],
+			},
 		},
 
 		ResourcesMap: map[string]*schema.Resource{
@@ -76,16 +82,19 @@ func init() {
 		"username": "The username of the PHPIPAM account",
 		"insecure": "Whether server should be accessed " +
 			"without verifying the TLS certificate.",
+		"verify_connection": "Whether the check connection to" +
+			"PHPIPAM API during provider initialization.",
 	}
 }
 
 func providerConfigure(d *schema.ResourceData) (interface{}, error) {
 	config := Config{
-		AppID:    d.Get("app_id").(string),
-		Endpoint: d.Get("endpoint").(string),
-		Password: d.Get("password").(string),
-		Username: d.Get("username").(string),
-		Insecure: d.Get("insecure").(bool),
+		AppID:            d.Get("app_id").(string),
+		Endpoint:         d.Get("endpoint").(string),
+		Password:         d.Get("password").(string),
+		Username:         d.Get("username").(string),
+		Insecure:         d.Get("insecure").(bool),
+		VerifyConnection: d.Get("verify_connection").(bool),
 	}
 	return config.Client()
 }
