@@ -5,6 +5,7 @@ import (
 	"log"
 	"reflect"
 	"regexp"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/pavel-z1/phpipam-sdk-go/controllers/addresses"
@@ -90,9 +91,10 @@ func trimMap(in map[string]interface{}) {
 //     what isn't set, and ensure that we clear out the keys that aren't set.
 //     Since our SDK does not currently support NOT NULL custom fields in
 //     PHPIPAM, we can safely set these to nil.
-//   - If we don't have a value for
-//     custom_fields at all, set all keys to nil and update so that all custom
-//     fields get blown away.
+//   - If we don't have a value for custom_fields at all, set all keys to nil
+//     and update so that all custom fields get blown away. HTTP 404 errors
+//     indicating that no custom fields are defined will be ignored if no
+//     custom fields are defined for the resource.
 func updateCustomFields(d *schema.ResourceData, client interface{}) error {
 	log.Printf("Start Update custom fields ...............")
 	customFields := make(map[string]interface{})
@@ -114,8 +116,13 @@ func updateCustomFields(d *schema.ResourceData, client interface{}) error {
 		panic(fmt.Errorf("Invalid client type passed %#v - this is a bug", client))
 	}
 	if err != nil {
-		return fmt.Errorf("Error getting custom fields for updating: %s", err)
+		if len(customFields) == 0 && (strings.Contains(err.Error(), "404") || (strings.Contains(err.Error(), "200") && strings.Contains(err.Error(), "No custom fields defined"))) {
+			return nil
+		} else {
+			return fmt.Errorf("Error getting custom fields for updating: %s", err)
+		}
 	}
+
 nextKey:
 	for k := range old {
 		for l, v := range customFields {
