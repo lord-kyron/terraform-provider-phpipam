@@ -38,6 +38,12 @@ func Provider() *schema.Provider {
 				Default:     false,
 				Description: descriptions["insecure"],
 			},
+			"nest_custom_fields": {
+				Type:        schema.TypeBool,
+				Optional:    true,
+				Default:     false,
+				Description: descriptions["nest_custom_fields"],
+			},
 		},
 
 		ResourcesMap: map[string]*schema.Resource{
@@ -76,16 +82,19 @@ func init() {
 		"username": "The username of the PHPIPAM account",
 		"insecure": "Whether server should be accessed " +
 			"without verifying the TLS certificate.",
+		"nest_custom_fields": "Whether the API client is configured " +
+			"to nest custom values.",
 	}
 }
 
 func providerConfigure(d *schema.ResourceData) (interface{}, error) {
 	config := Config{
-		AppID:    d.Get("app_id").(string),
-		Endpoint: d.Get("endpoint").(string),
-		Password: d.Get("password").(string),
-		Username: d.Get("username").(string),
-		Insecure: d.Get("insecure").(bool),
+		AppID:            d.Get("app_id").(string),
+		Endpoint:         d.Get("endpoint").(string),
+		Password:         d.Get("password").(string),
+		Username:         d.Get("username").(string),
+		Insecure:         d.Get("insecure").(bool),
+		NestCustomFields: d.Get("nest_custom_fields").(bool),
 	}
 	return config.Client()
 }

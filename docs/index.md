@@ -109,6 +109,9 @@ The options for the plugin are as follows:
   supplied via the `PHPIPAM_USER_NAME` variable.
 - `insecure` - Set to true to not validate the HTTPS certificate chain.
    Optional parameter, can be used only with HTTPS connections
+- `nest_custom_fields` - Set to true if your PHPIPAM application has the nested
+   custom fields feature enabled. ptional parameter, currently only affects
+   subnet resources.
 
 ### Resource importing
 

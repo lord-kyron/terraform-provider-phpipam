@@ -239,7 +239,7 @@ func dataSourceSubnetsSchema() map[string]*schema.Schema {
 // expandSubnet returns the subnets.Subnet structure for a
 // phpiapm_subnet resource or data source. Depending on if we are dealing with
 // the resource or data source, extra considerations may need to be taken.
-func expandSubnet(d *schema.ResourceData) subnets.Subnet {
+func expandSubnet(d *schema.ResourceData, nestCustomFields bool) subnets.Subnet {
 	s := subnets.Subnet{
 		ID:             d.Get("subnet_id").(int),
 		SubnetAddress:  d.Get("subnet_address").(string),
@@ -267,9 +267,18 @@ func expandSubnet(d *schema.ResourceData) subnets.Subnet {
 		Location:       d.Get("location_id").(int),
 		Gateway:        d.Get("gateway").(map[string]interface{}),
 		GatewayID:      d.Get("gateway_id").(string),
+		CustomFields:   conditionalCustomFields(d, nestCustomFields),
 	}
 
 	return s
+}
+
+func conditionalCustomFields(d *schema.ResourceData, nestCustomFields bool) map[string]interface{} {
+	if nestCustomFields {
+		return d.Get("custom_fields").(map[string]interface{})
+	} else {
+		return nil
+	}
 }
 
 // flattenSubnet sets fields in a *schema.ResourceData with fields supplied by
@@ -304,6 +313,10 @@ func flattenSubnet(s subnets.Subnet, d *schema.ResourceData) {
 	d.Set("edit_date", s.EditDate)
 	d.Set("gateway", s.Gateway)
 	d.Set("gateway_id", s.GatewayID)
+
+	if s.CustomFields != nil {
+		d.Set("custom_fields", s.CustomFields)
+	}
 }
 
 // subnetDescriptionMatchSchema returns a *schema.Schema for description
