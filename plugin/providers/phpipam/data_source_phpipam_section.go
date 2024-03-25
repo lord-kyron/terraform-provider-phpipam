@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log"
 	"strings"
+	"strconv"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/pavel-z1/phpipam-sdk-go/controllers/sections"
@@ -42,7 +43,21 @@ func dataSourcePHPIPAMSectionRead(d *schema.ResourceData, meta interface{}) erro
 			return err
 		}
 	default:
-		return errors.New("section_id or name not defined, cannot proceed with reading data")
+		// We need to ensure imported resources are not recreated when terraform apply is ran
+		// imported resources only have an Id which we need to map back to section_id
+		id := d.Id()
+		if len(id) > 0 {
+			section_id, err := strconv.Atoi(id)
+			if err != nil {
+				return err
+			}
+			out, err = c.GetSectionByID(section_id)
+			if err != nil {
+				return err
+			}
+		} else {
+			return errors.New("section_id or name not defined, cannot proceed with reading data")
+		}
 	}
 	flattenSection(out, d)
 	return nil
