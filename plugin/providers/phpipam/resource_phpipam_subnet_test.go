@@ -153,10 +153,11 @@ func testAccCheckResourcePHPIPAMSubnetCreated(s *terraform.State) error {
 func testAccCheckResourcePHPIPAMSubnetDeleted(s *terraform.State) error {
 	subnetController := testAccProvider.Meta().(*ProviderPHPIPAMClient).subnetsController
 	_, err := subnetController.GetSubnetsByCIDRAndSection(testAccResourcePHPIPAMSubnetCIDR, testAccResourceSubnetPHPIPAMSectionID)
+	error_messages := linearSearchSlice{"Error from API (404): No results (filter applied)", "Error from API (404): No subnets found"}
 	switch {
 	case err == nil:
 		return errors.New("Expected error, got none")
-	case err != nil && err.Error() != "Error from API (404): No results (filter applied)":
+	case err != nil && !error_messages.Has(err.Error()):
 		return fmt.Errorf("Expected 404, got %s", err)
 	}
 
