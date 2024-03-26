@@ -2,6 +2,7 @@ package phpipam
 
 import (
 	"errors"
+	"strconv"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/pavel-z1/phpipam-sdk-go/controllers/vlans"
@@ -47,7 +48,21 @@ func dataSourcePHPIPAMVLANRead(d *schema.ResourceData, meta interface{}) error {
 		}
 		out = v[0]
 	default:
-		return errors.New("vlan_id or number not defined, cannot proceed with reading data")
+		// We need to ensure imported resources are not recreated when terraform apply is ran
+		// imported resources only have an Id which we need to map back to vlan_id
+		id := d.Id()
+		if len(id) > 0 {
+			vlan_id, err := strconv.Atoi(id)
+			if err != nil {
+				return err
+			}
+			out, err = c.GetVLANByID(vlan_id)
+			if err != nil {
+				return err
+			}
+		} else {
+			return errors.New("vlan_id or number not defined, cannot proceed with reading data")
+		}
 	}
 
 	if checkVlansCustomFiledsExists(d, c) {
