@@ -39,11 +39,12 @@ along to the configuration for a VM, say, for example, a
 
 ```hcl
 provider "phpipam" {
-  app_id   = "test"
-  endpoint = "https://phpipam.example.com/api"
-  password = "PHPIPAM_PASSWORD"
-  username = "Admin"
-  insecure = false
+  app_id             = "test"
+  endpoint           = "https://phpipam.example.com/api"
+  password           = "PHPIPAM_PASSWORD"
+  username           = "Admin"
+  insecure           = false
+  nest_custom_fields = false
 }
 
 data "phpipam_subnet" "subnet" {
@@ -109,9 +110,9 @@ The options for the plugin are as follows:
   supplied via the `PHPIPAM_USER_NAME` variable.
 - `insecure` - Set to true to not validate the HTTPS certificate chain.
    Optional parameter, can be used only with HTTPS connections
-- `nest_custom_fields` - Set to true if your PHPIPAM application has the nested
-   custom fields feature enabled. ptional parameter, currently only affects
-   subnet resources.
+- `nest_custom_fields` - Set to true if the API application has this feature
+   enabled. Currently, this allows the provider to only make one API call when
+   creating subnets, instead of two.
 
 ### Resource importing
 
