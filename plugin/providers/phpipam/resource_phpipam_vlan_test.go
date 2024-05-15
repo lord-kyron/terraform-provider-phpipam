@@ -148,10 +148,11 @@ func testAccCheckResourcePHPIPAMVLANCreated(s *terraform.State) error {
 func testAccCheckResourcePHPIPAMVLANDeleted(s *terraform.State) error {
 	c := testAccProvider.Meta().(*ProviderPHPIPAMClient).vlansController
 	_, err := c.GetVLANsByNumberAndDomainID(testAccResourcePHPIPAMVLANNumber, testAccResourceVlanPHPIPAML2DomainID)
+	error_messages := linearSearchSlice{"Error from API (404): No results (filter applied)", "Error from API (404): Vlans not found"}
 	switch {
 	case err == nil:
 		return errors.New("Expected error, got none")
-	case err != nil && err.Error() != "Error from API (404): No results (filter applied)":
+	case err != nil && !error_messages.Has(err.Error()):
 		return fmt.Errorf("Expected 404, got %s", err)
 	}
 

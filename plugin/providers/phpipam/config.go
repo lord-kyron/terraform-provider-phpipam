@@ -34,6 +34,9 @@ type Config struct {
 
 	// Allow connect to HTTPS without SSL issuer validation
 	Insecure bool
+
+	// Whether the API client is configured to nest custom fields
+	NestCustomFields bool
 }
 
 // ProviderPHPIPAMClient is a structure that contains the client connections
@@ -57,16 +60,19 @@ type ProviderPHPIPAMClient struct {
 
 	// Mutex for free IP address allocation.
 	addressAllocationLock sync.Mutex
+
+	// Whether the API client is configured to nest custom values
+	NestCustomFields bool
 }
 
 // Client configures and returns a fully initialized PingdomClient.
 func (c *Config) Client() (interface{}, error) {
 	cfg := phpipam.Config{
-		AppID:    c.AppID,
-		Endpoint: c.Endpoint,
-		Password: c.Password,
-		Username: c.Username,
-		Insecure: c.Insecure,
+		AppID:            c.AppID,
+		Endpoint:         c.Endpoint,
+		Password:         c.Password,
+		Username:         c.Username,
+		Insecure:         c.Insecure,
 	}
 	log.Printf("[DEBUG] Initializing PHPIPAM controllers")
 	sess := session.NewSession(cfg)
@@ -78,6 +84,7 @@ func (c *Config) Client() (interface{}, error) {
 		l2domainsController: l2domains.NewController(sess),
 		subnetsController:   subnets.NewController(sess),
 		vlansController:     vlans.NewController(sess),
+		NestCustomFields:    c.NestCustomFields,
 	}
 
 	// Validate that our conneciton is okay
