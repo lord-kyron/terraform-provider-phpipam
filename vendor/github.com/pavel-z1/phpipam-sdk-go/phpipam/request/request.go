@@ -155,8 +155,10 @@ func (r *Request) Send() error {
 		buf := bytes.NewBuffer(bs)
 		req, err = http.NewRequest(r.Method, fmt.Sprintf("%s/%s%s", r.Session.Config.Endpoint, r.Session.Config.AppID, r.URI), buf)
 		req.Header.Add("Content-Type", "application/json")
+		req.Header.Add("api-stringify-results", "1")
 	case "GET":
 		req, err = http.NewRequest(r.Method, fmt.Sprintf("%s/%s%s", r.Session.Config.Endpoint, r.Session.Config.AppID, r.URI), nil)
+		req.Header.Add("api-stringify-results", "1")
 
 	default:
 		return fmt.Errorf("API request method %s not supported by PHPIPAM", r.Method)
