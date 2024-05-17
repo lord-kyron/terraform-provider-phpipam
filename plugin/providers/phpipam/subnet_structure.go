@@ -16,6 +16,7 @@ import (
 // Computed. Any field not listed here cannot be supplied by the resource and
 // is solely computed.
 var resourceSubnetOptionalFields = linearSearchSlice{
+	"section_id",
 	"description",
 	"linked_subnet_id",
 	"vlan_id",
@@ -146,8 +147,10 @@ func resourceFirstFreeSubnetSchema() map[string]*schema.Schema {
 			v.ForceNew = true
 		case k == "section_id":
 			v.Optional = true
+			v.Computed = true
 		case k == "custom_fields":
 			v.Optional = true
+			v.Computed = true
 		case resourceSubnetOptionalFields.Has(k):
 			v.Optional = true
 			v.Computed = true
