@@ -75,6 +75,9 @@ type Subnet struct {
 	// Controls if we are adding a subnet or folder.
 	IsFolder phpipam.BoolIntString `json:"isFolder,omitempty"`
 
+	// Marks the subnet as permitting allocation of the network and broadcast addresses.
+	IsPool phpipam.BoolIntString `json:"isPool,omitempty"`
+
 	// Marks the subnet as used.
 	IsFull phpipam.BoolIntString `json:"isFull,omitempty"`
 
