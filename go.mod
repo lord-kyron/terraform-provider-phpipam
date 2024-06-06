@@ -1,6 +1,6 @@
 module github.com/lord-kyron/terraform-provider-phpipam
 
-go 1.20
+go 1.22
 
 require (
 	github.com/hashicorp/terraform-plugin-sdk/v2 v2.26.1
