@@ -28,7 +28,7 @@ func dataSourcePHPIPAMAddressRead(d *schema.ResourceData, meta interface{}) erro
 	case d.Get("address_id").(int) != 0:
 		out[0], err = c.GetAddressByID(d.Get("address_id").(int))
 		if err != nil {
-			if strings.Contains(err.Error(), "Invalid Id") {
+			if strings.Contains(err.Error(), "Invalid Id") || strings.Contains(err.Error(), "No addresses found") {
 				log.Printf("[DEBUG] Invalid Id Seen")
 				log.Printf(err.Error())
 				// IP not found by id
