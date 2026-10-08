@@ -11,7 +11,44 @@ instruction. But be carefull, phpIPAM currently has a bug
 Use resource with count option only with limited terraform threads count: `**terraform apply -parallelism=1**`
 .
 
+## Argument Reference
+
+Exactly one of the following two parameters must be set:
+
+- `subnet_id` (Optional) - The ID of the subnet to allocate the address from.
+- `subnet_ids` (Optional) - An ordered list of subnet IDs. The provider tries
+  each subnet in turn and creates the address in the first subnet that still
+  has a free address available. This is useful when you have several small,
+  non-contiguous address blocks and don't mind which one is used. `subnet_id`
+  is populated with the ID of the subnet that was actually used, so it can
+  still be read back with `phpipam_first_free_address.new_ip.subnet_id`.
+
+**Example: allocate from the first available subnet in a list:**
+
+```hcl
+resource "phpipam_first_free_address" "new_ip" {
+  subnet_ids  = [10, 11, 12]
+  hostname    = "vps01.example.internal"
+  description = "Managed by Terraform"
+}
+```
+
+**Migrating an existing resource from `subnet_id` to `subnet_ids`:** switching a
+resource's config from `subnet_id = 10` to `subnet_ids = [10, 11]` does **not**
+force a replacement as long as the subnet currently holding the address (`10`
+in this example) is still part of the `subnet_ids` list - the address doesn't
+need to move, so Terraform leaves it untouched. Removing that subnet from the
+list, however, is a real change of subnet and will still force a replacement.
+
+⚠️ This only works if every ID in `subnet_ids` is already known at plan time.
+If one of the subnets is being created in the *same* `terraform apply` (e.g.
+`subnet_ids = [10, phpipam_subnet.new.subnet_id]` where `phpipam_subnet.new`
+doesn't exist yet), Terraform cannot prove the list is safe and will force a
+replacement anyway. Apply new subnets first (or reference already-existing
+subnets/data sources) before migrating an existing address to `subnet_ids`.
+
 **Example create IPs in loop with `count`:**
+
 
 ```hcl
 // Look up the subnet

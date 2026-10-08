@@ -1,9 +1,11 @@
 package phpipam
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
@@ -15,11 +17,12 @@ import (
 // read workflow is identical for both the resource and the data source.
 func resourcePHPIPAMFirstFreeAddress() *schema.Resource {
 	return &schema.Resource{
-		Create: resourcePHPIPAMFirstFreeAddressCreate,
-		Read:   dataSourcePHPIPAMAddressRead,
-		Update: resourcePHPIPAMFirstFreeAddressUpdate,
-		Delete: resourcePHPIPAMFirstFreeAddressDelete,
-		Schema: resourceFirstFreeAddressSchema(),
+		Create:        resourcePHPIPAMFirstFreeAddressCreate,
+		Read:          dataSourcePHPIPAMAddressRead,
+		Update:        resourcePHPIPAMFirstFreeAddressUpdate,
+		Delete:        resourcePHPIPAMFirstFreeAddressDelete,
+		CustomizeDiff: resourcePHPIPAMFirstFreeAddressCustomizeDiff,
+		Schema:        resourceFirstFreeAddressSchema(),
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},
@@ -97,10 +100,14 @@ func resourceFirstFreeAddressSchema() map[string]*schema.Schema {
 	s := bareAddressSchema()
 	for k, v := range s {
 		switch {
-		// IP Address and Subnet ID are ForceNew
+		// Subnet ID is ForceNew, and is mutually exclusive with subnet_ids.
+		// It stays Computed so it reflects the subnet actually used once an
+		// address has been allocated from subnet_ids.
 		case k == "subnet_id":
-			v.Required = true
+			v.Optional = true
+			v.Computed = true
 			v.ForceNew = true
+			v.ExactlyOneOf = []string{"subnet_id", "subnet_ids"}
 		case k == "custom_fields":
 			v.Optional = true
 		case resourceAddressOptionalFields.Has(k):
@@ -110,12 +117,65 @@ func resourceFirstFreeAddressSchema() map[string]*schema.Schema {
 			v.Computed = true
 		}
 	}
+	// subnet_ids allows picking the first subnet, in order, that still has a
+	// free address, instead of a single mandatory subnet_id. It is Computed so
+	// resourcePHPIPAMFirstFreeAddressCustomizeDiff can clear its diff when
+	// migrating from subnet_id without forcing a replacement.
+	s["subnet_ids"] = &schema.Schema{
+		Type:         schema.TypeList,
+		Optional:     true,
+		Computed:     true,
+		ForceNew:     true,
+		Elem:         &schema.Schema{Type: schema.TypeInt},
+		ExactlyOneOf: []string{"subnet_id", "subnet_ids"},
+	}
 	return s
 }
 
+// resourcePHPIPAMFirstFreeAddressCustomizeDiff prevents a spurious replacement
+// when a config moves from a single subnet_id to a subnet_ids list that still
+// contains the subnet the address already lives in - the address itself does
+// not need to move, so there is nothing to force a new resource for.
+func resourcePHPIPAMFirstFreeAddressCustomizeDiff(ctx context.Context, d *schema.ResourceDiff, meta interface{}) error {
+	oldSubnetIDRaw, _ := d.GetChange("subnet_id")
+	currentSubnetID := oldSubnetIDRaw.(int)
+	if currentSubnetID == 0 {
+		return nil
+	}
+
+	// subnet_ids is Optional+Computed, so GetOk alone would happily fall back
+	// to its last known state value even when the config only sets subnet_id
+	// (e.g. when genuinely moving to a different subnet). Only reconcile when
+	// subnet_ids is actually present in the raw config.
+	rawConfig := d.GetRawConfig()
+	if rawConfig.IsNull() || !rawConfig.IsKnown() {
+		return nil
+	}
+	subnetIDsInConfig := rawConfig.GetAttr("subnet_ids")
+	if subnetIDsInConfig.IsNull() || !subnetIDsInConfig.IsKnown() {
+		return nil
+	}
+
+	rawIDs, ok := d.GetOk("subnet_ids")
+	if !ok {
+		return nil
+	}
+
+	for _, v := range rawIDs.([]interface{}) {
+		if v.(int) == currentSubnetID {
+			if err := d.Clear("subnet_id"); err != nil {
+				return err
+			}
+			return d.Clear("subnet_ids")
+		}
+	}
+
+	return nil
+}
+
 func resourcePHPIPAMFirstFreeAddressCreate(d *schema.ResourceData, meta interface{}) error {
-	// Get first free IP from provided subnet_id
-	subnet_id := d.Get("subnet_id").(int)
+	// Try subnet_ids (or the single subnet_id) in order until one has a free address.
+	ids := subnetIDsFromResourceData(d)
 	d.Set("subnet_id", nil)
 
 	// Get address controller and start address creation
@@ -123,11 +183,28 @@ func resourcePHPIPAMFirstFreeAddressCreate(d *schema.ResourceData, meta interfac
 
 	in := expandAddress(d)
 
-	out, err := c.CreateFirstFreeAddress(subnet_id, in)
-	if err != nil {
-		return err
+	var out string
+	var err error
+	found := false
+	for _, id := range ids {
+		out, err = c.CreateFirstFreeAddress(id, in)
+		switch {
+		case err != nil && strings.Contains(err.Error(), "No free addresses found"):
+			continue
+		case err != nil:
+			return err
+		}
+		found = true
+		break
+	}
+	if !found {
+		return fmt.Errorf("No free IP addresses found in any of the provided subnets: %s", err)
 	}
 	d.Set("ip_address", out)
+	// Persist the candidate list so future plans see subnet_ids as already
+	// known and don't treat it as still-to-be-computed (which, combined with
+	// ForceNew, would force a replacement on every plan).
+	d.Set("subnet_ids", ids)
 
 	// If we have custom fields, set them now. We need to get the IP address's ID
 	// beforehand.
