@@ -52,18 +52,6 @@ resource "phpipam_address" "newip" {
     ]
   }
 }
-```
-
-**Example: search across several subnets:**
-
-```hcl
-data "phpipam_first_free_address" "next_address" {
-  subnet_ids = [10, 11, 12]
-}
-
-// data.phpipam_first_free_address.next_address.subnet_id contains the ID of
-// the subnet the address was actually allocated from.
-```
 
 // Supply the IP address to an instance. Note that we are also ignoring
 // network_interface here to ensure the IP address does not get re-calculated.
@@ -85,4 +73,15 @@ resource "vsphere_virtual_machine" "web" {
     network_interface,
   ]
 }
+```
+
+**Example: search across several subnets:**
+
+```hcl
+data "phpipam_first_free_address" "next_address" {
+  subnet_ids = [10, 11, 12]
+}
+
+// data.phpipam_first_free_address.next_address.subnet_id contains the ID of
+// the subnet the address was actually allocated from.
 ```

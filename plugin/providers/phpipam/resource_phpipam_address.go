@@ -30,6 +30,7 @@ func resourcePHPIPAMAddress() *schema.Resource {
 // resourcePHPIPAMAddressRead restores address_id from Terraform's resource ID
 // for states created by provider versions that did not persist address_id.
 // Reading by ID avoids the IP-and-subnet endpoint, which no longer works with
+// phpIPAM 1.8.3.
 func resourcePHPIPAMAddressRead(d *schema.ResourceData, meta interface{}) error {
 	if d.Get("address_id").(int) == 0 && d.Id() != "" {
 		addressID, err := strconv.Atoi(d.Id())

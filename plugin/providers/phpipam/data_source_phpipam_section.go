@@ -3,8 +3,8 @@ package phpipam
 import (
 	"errors"
 	"log"
-	"strings"
 	"strconv"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/pavel-z1/phpipam-sdk-go/controllers/sections"

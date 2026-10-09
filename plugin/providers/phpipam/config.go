@@ -68,11 +68,11 @@ type ProviderPHPIPAMClient struct {
 // Client configures and returns a fully initialized PingdomClient.
 func (c *Config) Client() (interface{}, error) {
 	cfg := phpipam.Config{
-		AppID:            c.AppID,
-		Endpoint:         c.Endpoint,
-		Password:         c.Password,
-		Username:         c.Username,
-		Insecure:         c.Insecure,
+		AppID:    c.AppID,
+		Endpoint: c.Endpoint,
+		Password: c.Password,
+		Username: c.Username,
+		Insecure: c.Insecure,
 	}
 	log.Printf("[DEBUG] Initializing PHPIPAM controllers")
 	sess := session.NewSession(cfg)
