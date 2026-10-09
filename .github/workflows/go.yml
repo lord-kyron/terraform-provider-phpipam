@@ -1,13 +1,10 @@
-# This GitHub action can publish assets for release when a tag is created.
-# Currently its setup to run on any tag that matches the pattern "v*" (ie. v0.1.0).
+# Builds, signs and publishes a release with GoReleaser whenever a tag matching
+# "v*" (e.g. v1.7.1) is pushed.
 #
-# This uses an action (paultyng/ghaction-import-gpg) that assumes you set your
-# private key in the `GPG_PRIVATE_KEY` secret and passphrase in the `PASSPHRASE`
-# secret. If you would rather own your own GPG handling, please fork this action
-# or use an alternative one for key handling.
-#
-# You will need to pass the `--batch` flag to `gpg` in your signing step
-# in `goreleaser` to indicate this is being used in a non-interactive mode.
+# Signing uses crazy-max/ghaction-import-gpg, which reads the private key from
+# the `GPG_PRIVATE_KEY` secret and its passphrase from the `PASSPHRASE` secret.
+# The key's fingerprint is handed to GoReleaser as GPG_FINGERPRINT; the signing
+# step in .goreleaser.yml passes `--batch` so gpg runs non-interactively.
 #
 name: release
 on:
