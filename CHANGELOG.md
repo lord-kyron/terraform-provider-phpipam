@@ -1,3 +1,10 @@
+## 1.7.1
+ * Added support for subnet_ids to phpipam_first_free_address - [issue #101](https://github.com/lord-kyron/terraform-provider-phpipam/pull/101)
+ * Fixed phpipam_address state refresh with phpIPAM 1.8.3 - [issue #103](https://github.com/lord-kyron/terraform-provider-phpipam/pull/103)
+ * Bumped the minimum Go version to 1.26
+ * Updated dependencies: `terraform-plugin-sdk/v2` 2.26.1 -> 2.40.1, `phpipam-sdk-go` 0.1.9 -> 0.1.10, `go-cty` -> 1.5.0, plus all transitive dependencies (gRPC, protobuf, `golang.org/x/*`, etc.)
+ * Fixed log calls that used non-constant format strings, which `go vet` rejects under Go 1.26
+ * Fixed the broken code block in the `phpipam_first_free_address` data source docs
 ## 1.7.0
  * Applied fix for [issue #100](https://github.com/lord-kyron/terraform-provider-phpipam/issues/100) - read-only fields are no longer sent back on resource updates, which broke `terraform apply` after an import with `Invalid request key gateway`
  * Applied fix for [issue #95](https://github.com/lord-kyron/terraform-provider-phpipam/issues/95) via [pull request #97](https://github.com/lord-kyron/terraform-provider-phpipam/pull/97) - permanent diff on `custom_fields` in the `phpipam_first_free_subnet` resource
