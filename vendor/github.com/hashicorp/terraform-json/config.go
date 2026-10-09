@@ -1,3 +1,6 @@
+// Copyright IBM Corp. 2019, 2026
+// SPDX-License-Identifier: MPL-2.0
+
 package tfjson
 
 import (
@@ -29,6 +32,10 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// UnmarshalJSON implements json.Unmarshaler for Config.
+//
+// As per established convention this method should only ever
+// be invoked *indirectly* via [encoding/json] library.
 func (c *Config) UnmarshalJSON(b []byte) error {
 	type rawConfig Config
 	var config rawConfig

@@ -18,6 +18,9 @@ func (Curve) Identity() *Point {
 func (Curve) IsOnCurve(P *Point) bool {
 	x2, y2, t, t2, z2 := &fp.Elt{}, &fp.Elt{}, &fp.Elt{}, &fp.Elt{}, &fp.Elt{}
 	rhs, lhs := &fp.Elt{}, &fp.Elt{}
+	// Check z != 0
+	eq0 := !fp.IsZero(&P.z)
+
 	fp.Mul(t, &P.ta, &P.tb)  // t = ta*tb
 	fp.Sqr(x2, &P.x)         // x^2
 	fp.Sqr(y2, &P.y)         // y^2
@@ -27,13 +30,14 @@ func (Curve) IsOnCurve(P *Point) bool {
 	fp.Mul(rhs, t2, &paramD) // dt^2
 	fp.Add(rhs, rhs, z2)     // z^2 + dt^2
 	fp.Sub(lhs, lhs, rhs)    // x^2 + y^2 - (z^2 + dt^2)
-	eq0 := fp.IsZero(lhs)
+	eq1 := fp.IsZero(lhs)
 
 	fp.Mul(lhs, &P.x, &P.y) // xy
 	fp.Mul(rhs, t, &P.z)    // tz
 	fp.Sub(lhs, lhs, rhs)   // xy - tz
-	eq1 := fp.IsZero(lhs)
-	return eq0 && eq1
+	eq2 := fp.IsZero(lhs)
+
+	return eq0 && eq1 && eq2
 }
 
 // Generator returns the generator point.
@@ -57,6 +61,9 @@ func (Curve) Double(P *Point) *Point { R := *P; R.Double(); return &R }
 func (Curve) Add(P, Q *Point) *Point { R := *P; R.Add(Q); return &R }
 
 // ScalarMult returns kP. This function runs in constant time.
+//
+// The result equals [k]P only when P is in the prime-order subgroup; any
+// torsion component of P is dropped.
 func (e Curve) ScalarMult(k *Scalar, P *Point) *Point {
 	k4 := &Scalar{}
 	k4.divBy4(k)
@@ -71,6 +78,9 @@ func (e Curve) ScalarBaseMult(k *Scalar) *Point {
 }
 
 // CombinedMult returns mG+nP, where G is the generator point. This function is non-constant time.
+//
+// Like ScalarMult, the result equals [m]G+[n]P only when P is in the
+// prime-order subgroup; any torsion component of P is dropped.
 func (e Curve) CombinedMult(m, n *Scalar, P *Point) *Point {
 	m4 := &Scalar{}
 	n4 := &Scalar{}

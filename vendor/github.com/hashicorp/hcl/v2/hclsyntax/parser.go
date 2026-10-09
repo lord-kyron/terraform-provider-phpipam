@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2014, 2026
 // SPDX-License-Identifier: MPL-2.0
 
 package hclsyntax
@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"unicode/utf8"
 
-	"github.com/apparentlymart/go-textseg/v13/textseg"
 	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/internal/unicodeutil"
 	"github.com/zclconf/go-cty/cty"
 )
 
@@ -234,7 +234,6 @@ func (p *parser) parseSingleAttrBody(end TokenType) (*Body, hcl.Diagnostics) {
 			End:      attr.SrcRange.End,
 		},
 	}, diags
-
 }
 
 func (p *parser) finishParsingBodyAttribute(ident Token, singleLine bool) (Node, hcl.Diagnostics) {
@@ -295,7 +294,7 @@ func (p *parser) finishParsingBodyAttribute(ident Token, singleLine bool) (Node,
 }
 
 func (p *parser) finishParsingBodyBlock(ident Token) (Node, hcl.Diagnostics) {
-	var blockType = string(ident.Bytes)
+	blockType := string(ident.Bytes)
 	var diags hcl.Diagnostics
 	var labels []string
 	var labelRanges []hcl.Range
@@ -359,6 +358,16 @@ Token:
 
 			p.recoverAfterBodyItem()
 
+			// Use the last label range as the CloseBraceRange placeholder so that
+			// Block.Range() covers the full block header including labels.
+			// Without this, the block range only spans the type keyword,
+			// causing position-based lookups like OutermostBlockAtPos to
+			// miss positions within the labels.
+			endRange := ident.Range
+			if len(labelRanges) > 0 {
+				endRange = labelRanges[len(labelRanges)-1]
+			}
+
 			return &Block{
 				Type:   blockType,
 				Labels: labels,
@@ -370,7 +379,7 @@ Token:
 				TypeRange:       ident.Range,
 				LabelRanges:     labelRanges,
 				OpenBraceRange:  ident.Range, // placeholder
-				CloseBraceRange: ident.Range, // placeholder
+				CloseBraceRange: endRange,    // placeholder
 			}, diags
 		}
 	}
@@ -811,9 +820,16 @@ Traversal:
 				// will probably be misparsed until we hit something that
 				// allows us to re-sync.
 				//
-				// We will probably need to do something better here eventually
-				// in order to support autocomplete triggered by typing a
-				// period.
+				// Returning an ExprSyntaxError allows us to pass more information
+				// about the invalid expression to the caller, which can then
+				// use this for example for completions that happen after typing
+				// a dot in an editor.
+				ret = &ExprSyntaxError{
+					Placeholder: cty.DynamicVal,
+					ParseDiags:  diags,
+					SrcRange:    hcl.RangeBetween(from.Range(), dot.Range),
+				}
+
 				p.setRecovery()
 			}
 
@@ -999,7 +1015,7 @@ func (p *parser) parseExpressionTerm() (Expression, hcl.Diagnostics) {
 	case TokenIdent:
 		tok := p.Read() // eat identifier token
 
-		if p.Peek().Type == TokenOParen {
+		if p.Peek().Type == TokenOParen || p.Peek().Type == TokenDoubleColon {
 			return p.finishParsingFunctionCall(tok)
 		}
 
@@ -1145,16 +1161,76 @@ func (p *parser) numberLitValue(tok Token) (cty.Value, hcl.Diagnostics) {
 
 // finishParsingFunctionCall parses a function call assuming that the function
 // name was already read, and so the peeker should be pointing at the opening
-// parenthesis after the name.
+// parenthesis after the name, or at the double-colon after the initial
+// function scope name.
 func (p *parser) finishParsingFunctionCall(name Token) (Expression, hcl.Diagnostics) {
+	var diags hcl.Diagnostics
+
 	openTok := p.Read()
-	if openTok.Type != TokenOParen {
+	if openTok.Type != TokenOParen && openTok.Type != TokenDoubleColon {
 		// should never happen if callers behave
-		panic("finishParsingFunctionCall called with non-parenthesis as next token")
+		panic("finishParsingFunctionCall called with unsupported next token")
+	}
+
+	nameStr := string(name.Bytes)
+	nameEndPos := name.Range.End
+	for openTok.Type == TokenDoubleColon {
+		nextName := p.Read()
+		if nextName.Type != TokenIdent {
+			diag := hcl.Diagnostic{
+				Severity: hcl.DiagError,
+				Summary:  "Missing function name",
+				Detail:   "Function scope resolution symbol :: must be followed by a function name in this scope.",
+				Subject:  &nextName.Range,
+				Context:  hcl.RangeBetween(name.Range, nextName.Range).Ptr(),
+			}
+			diags = append(diags, &diag)
+			p.recoverOver(TokenOParen)
+			return &ExprSyntaxError{
+				ParseDiags:  hcl.Diagnostics{&diag},
+				Placeholder: cty.DynamicVal,
+				SrcRange:    hcl.RangeBetween(name.Range, nextName.Range),
+			}, diags
+		}
+
+		// Initial versions of HCLv2 didn't support function namespaces, and
+		// so for backward compatibility we just treat namespaced functions
+		// as weird names with "::" separators in them, saved as a string
+		// to keep the API unchanged. FunctionCallExpr also has some special
+		// handling of names containing :: when referring to a function that
+		// doesn't exist in EvalContext, to return better error messages
+		// when namespaces are used incorrectly.
+		nameStr = nameStr + "::" + string(nextName.Bytes)
+		nameEndPos = nextName.Range.End
+
+		openTok = p.Read()
+	}
+
+	nameRange := hcl.Range{
+		Filename: name.Range.Filename,
+		Start:    name.Range.Start,
+		End:      nameEndPos,
+	}
+
+	if openTok.Type != TokenOParen {
+		diag := hcl.Diagnostic{
+			Severity: hcl.DiagError,
+			Summary:  "Missing open parenthesis",
+			Detail:   "Function selector must be followed by an open parenthesis to begin the function call.",
+			Subject:  &openTok.Range,
+			Context:  hcl.RangeBetween(name.Range, openTok.Range).Ptr(),
+		}
+
+		diags = append(diags, &diag)
+		p.recoverOver(TokenOParen)
+		return &ExprSyntaxError{
+			ParseDiags:  hcl.Diagnostics{&diag},
+			Placeholder: cty.DynamicVal,
+			SrcRange:    hcl.RangeBetween(name.Range, openTok.Range),
+		}, diags
 	}
 
 	var args []Expression
-	var diags hcl.Diagnostics
 	var expandFinal bool
 	var closeTok Token
 
@@ -1218,7 +1294,7 @@ Token:
 				diags = append(diags, &hcl.Diagnostic{
 					Severity: hcl.DiagError,
 					Summary:  "Unterminated function call",
-					Detail:   "There is no closing parenthesis for this function call before the end of the file. This may be caused by incorrect parethesis nesting elsewhere in this file.",
+					Detail:   "There is no closing parenthesis for this function call before the end of the file. This may be caused by incorrect parenthesis nesting elsewhere in this file.",
 					Subject:  hcl.RangeBetween(name.Range, openTok.Range).Ptr(),
 				})
 			default:
@@ -1245,12 +1321,12 @@ Token:
 	p.PopIncludeNewlines()
 
 	return &FunctionCallExpr{
-		Name: string(name.Bytes),
+		Name: nameStr,
 		Args: args,
 
 		ExpandFinal: expandFinal,
 
-		NameRange:       name.Range,
+		NameRange:       nameRange,
 		OpenParenRange:  openTok.Range,
 		CloseParenRange: closeTok.Range,
 	}, diags
@@ -1374,7 +1450,7 @@ func (p *parser) parseObjectCons() (Expression, hcl.Diagnostics) {
 		}
 
 		// Wrapping parens are not explicitly represented in the AST, but
-		// we want to use them here to disambiguate intepreting a mapping
+		// we want to use them here to disambiguate interpreting a mapping
 		// key as a full expression rather than just a name, and so
 		// we'll remember this was present and use it to force the
 		// behavior of our final ObjectConsKeyExpr.
@@ -1454,6 +1530,10 @@ func (p *parser) parseObjectCons() (Expression, hcl.Diagnostics) {
 
 		value, valueDiags := p.ParseExpression()
 		diags = append(diags, valueDiags...)
+		items = append(items, ObjectConsItem{
+			KeyExpr:   key,
+			ValueExpr: value,
+		})
 
 		if p.recovery && valueDiags.HasErrors() {
 			// If expression parsing failed then we are probably in a strange
@@ -1462,11 +1542,6 @@ func (p *parser) parseObjectCons() (Expression, hcl.Diagnostics) {
 			close = p.recover(TokenCBrace)
 			break
 		}
-
-		items = append(items, ObjectConsItem{
-			KeyExpr:   key,
-			ValueExpr: value,
-		})
 
 		next = p.Peek()
 		if next.Type == TokenCBrace {
@@ -1861,7 +1936,7 @@ Slices:
 		// Advance the end of our range to after our token.
 		b := slice
 		for len(b) > 0 {
-			adv, ch, _ := textseg.ScanGraphemeClusters(b, true)
+			adv, ch, _ := unicodeutil.ScanGraphemeClusters(b, true)
 			rng.End.Byte += adv
 			switch ch[0] {
 			case '\r', '\n':

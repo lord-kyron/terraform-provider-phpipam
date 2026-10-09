@@ -1,3 +1,6 @@
+// Copyright IBM Corp. 2020, 2026
+// SPDX-License-Identifier: MPL-2.0
+
 package tfexec
 
 import (
@@ -9,19 +12,22 @@ import (
 )
 
 type planConfig struct {
-	destroy      bool
-	dir          string
-	lock         bool
-	lockTimeout  string
-	out          string
-	parallelism  int
-	reattachInfo ReattachInfo
-	refresh      bool
-	replaceAddrs []string
-	state        string
-	targets      []string
-	vars         []string
-	varFiles     []string
+	allowDeferral     bool
+	destroy           bool
+	dir               string
+	generateConfigOut string
+	lock              bool
+	lockTimeout       string
+	out               string
+	parallelism       int
+	reattachInfo      ReattachInfo
+	refresh           bool
+	refreshOnly       bool
+	replaceAddrs      []string
+	state             string
+	targets           []string
+	vars              []string
+	varFiles          []string
 }
 
 var defaultPlanOptions = planConfig{
@@ -65,6 +71,10 @@ func (opt *RefreshOption) configurePlan(conf *planConfig) {
 	conf.refresh = opt.refresh
 }
 
+func (opt *RefreshOnlyOption) configurePlan(conf *planConfig) {
+	conf.refreshOnly = opt.refreshOnly
+}
+
 func (opt *ReplaceOption) configurePlan(conf *planConfig) {
 	conf.replaceAddrs = append(conf.replaceAddrs, opt.address)
 }
@@ -87,6 +97,14 @@ func (opt *LockOption) configurePlan(conf *planConfig) {
 
 func (opt *DestroyFlagOption) configurePlan(conf *planConfig) {
 	conf.destroy = opt.destroy
+}
+
+func (opt *AllowDeferralOption) configurePlan(conf *planConfig) {
+	conf.allowDeferral = opt.allowDeferral
+}
+
+func (opt *GenerateConfigOutOption) configurePlan(conf *planConfig) {
+	conf.generateConfigOut = opt.path
 }
 
 // Plan executes `terraform plan` with the specified options and waits for it
@@ -181,6 +199,13 @@ func (tf *Terraform) buildPlanArgs(ctx context.Context, c planConfig) ([]string,
 	args := []string{"plan", "-no-color", "-input=false", "-detailed-exitcode"}
 
 	// string opts: only pass if set
+	if c.generateConfigOut != "" {
+		err := tf.compatible(ctx, tf1_5_0, nil)
+		if err != nil {
+			return nil, fmt.Errorf("generate-config-out option was introduced in Terraform 1.5.0: %w", err)
+		}
+		args = append(args, "-generate-config-out="+c.generateConfigOut)
+	}
 	if c.lockTimeout != "" {
 		args = append(args, "-lock-timeout="+c.lockTimeout)
 	}
@@ -198,6 +223,17 @@ func (tf *Terraform) buildPlanArgs(ctx context.Context, c planConfig) ([]string,
 	args = append(args, "-lock="+strconv.FormatBool(c.lock))
 	args = append(args, "-parallelism="+fmt.Sprint(c.parallelism))
 	args = append(args, "-refresh="+strconv.FormatBool(c.refresh))
+
+	if c.refreshOnly {
+		err := tf.compatible(ctx, tf0_15_4, nil)
+		if err != nil {
+			return nil, fmt.Errorf("refresh-only option was introduced in Terraform 0.15.4: %w", err)
+		}
+		if !c.refresh {
+			return nil, fmt.Errorf("you cannot use refresh=false in refresh-only planning mode")
+		}
+		args = append(args, "-refresh-only")
+	}
 
 	// unary flags: pass if true
 	if c.replaceAddrs != nil {
@@ -223,6 +259,21 @@ func (tf *Terraform) buildPlanArgs(ctx context.Context, c planConfig) ([]string,
 		for _, v := range c.vars {
 			args = append(args, "-var", v)
 		}
+	}
+	if c.allowDeferral {
+		// Ensure the version is later than 1.9.0
+		err := tf.compatible(ctx, tf1_9_0, nil)
+		if err != nil {
+			return nil, fmt.Errorf("-allow-deferral is an experimental option introduced in Terraform 1.9.0: %w", err)
+		}
+
+		// Ensure the version has experiments enabled (alpha or dev builds)
+		err = tf.experimentsEnabled(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("-allow-deferral is only available in experimental Terraform builds: %w", err)
+		}
+
+		args = append(args, "-allow-deferral")
 	}
 
 	return args, nil

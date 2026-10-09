@@ -1,3 +1,6 @@
+// Copyright IBM Corp. 2019, 2026
+// SPDX-License-Identifier: MPL-2.0
+
 package tfjson
 
 import "encoding/json"
@@ -44,6 +47,9 @@ type ExpressionData struct {
 }
 
 // UnmarshalJSON implements json.Unmarshaler for Expression.
+//
+// As per established convention this method should only ever
+// be invoked *indirectly* via [encoding/json] library.
 func (e *Expression) UnmarshalJSON(b []byte) error {
 	result := new(ExpressionData)
 

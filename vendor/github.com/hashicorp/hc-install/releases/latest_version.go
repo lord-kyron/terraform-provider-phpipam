@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2020, 2026
 // SPDX-License-Identifier: MPL-2.0
 
 package releases
@@ -6,7 +6,6 @@ package releases
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
@@ -28,13 +27,23 @@ type LatestVersion struct {
 	Timeout            time.Duration
 	IncludePrereleases bool
 
+	// LicenseDir represents directory path where to install license files
+	// (required for enterprise versions, optional for Community editions).
+	LicenseDir string
+
+	// Enterprise indicates installation of enterprise version (leave nil for Community editions)
+	Enterprise *EnterpriseOptions
+
 	SkipChecksumVerification bool
 
 	// ArmoredPublicKey is a public PGP key in ASCII/armor format to use
 	// instead of built-in pubkey to verify signature of downloaded checksums
 	ArmoredPublicKey string
 
-	apiBaseURL    string
+	// ApiBaseURL is an optional field that specifies a custom URL to download the product from.
+	// If ApiBaseURL is set, the product will be downloaded from this base URL instead of the default site.
+	// Note: The directory structure of the custom URL must match the HashiCorp releases site (including the index.json files).
+	ApiBaseURL    string
 	logger        *log.Logger
 	pathsToRemove []string
 }
@@ -63,6 +72,10 @@ func (lv *LatestVersion) Validate() error {
 		return fmt.Errorf("invalid binary name: %q", lv.Product.BinaryName())
 	}
 
+	if err := validateEnterpriseOptions(lv.Enterprise, lv.LicenseDir); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -82,7 +95,7 @@ func (lv *LatestVersion) Install(ctx context.Context) (string, error) {
 	if dstDir == "" {
 		var err error
 		dirName := fmt.Sprintf("%s_*", lv.Product.Name)
-		dstDir, err = ioutil.TempDir("", dirName)
+		dstDir, err = os.MkdirTemp("", dirName)
 		if err != nil {
 			return "", err
 		}
@@ -92,8 +105,8 @@ func (lv *LatestVersion) Install(ctx context.Context) (string, error) {
 	lv.log().Printf("will install into dir at %s", dstDir)
 
 	rels := rjson.NewReleases()
-	if lv.apiBaseURL != "" {
-		rels.BaseURL = lv.apiBaseURL
+	if lv.ApiBaseURL != "" {
+		rels.BaseURL = lv.ApiBaseURL
 	}
 	rels.SetLogger(lv.log())
 	versions, err := rels.ListProductVersions(ctx, lv.Product.Name)
@@ -119,12 +132,13 @@ func (lv *LatestVersion) Install(ctx context.Context) (string, error) {
 	if lv.ArmoredPublicKey != "" {
 		d.ArmoredPublicKey = lv.ArmoredPublicKey
 	}
-	if lv.apiBaseURL != "" {
-		d.BaseURL = lv.apiBaseURL
+	if lv.ApiBaseURL != "" {
+		d.BaseURL = lv.ApiBaseURL
 	}
-	zipFilePath, err := d.DownloadAndUnpack(ctx, versionToInstall, dstDir)
-	if zipFilePath != "" {
-		lv.pathsToRemove = append(lv.pathsToRemove, zipFilePath)
+	licenseDir := lv.LicenseDir
+	up, err := d.DownloadAndUnpack(ctx, versionToInstall, dstDir, licenseDir)
+	if up != nil {
+		lv.pathsToRemove = append(lv.pathsToRemove, up.PathsToRemove...)
 	}
 	if err != nil {
 		return "", err
@@ -156,6 +170,7 @@ func (lv *LatestVersion) Remove(ctx context.Context) error {
 }
 
 func (lv *LatestVersion) findLatestMatchingVersion(pvs rjson.ProductVersionsMap, vc version.Constraints) (*rjson.ProductVersion, bool) {
+	expectedMetadata := enterpriseVersionMetadata(lv.Enterprise)
 	versions := make(version.Collection, 0)
 	for _, pv := range pvs.AsSlice() {
 		if !lv.IncludePrereleases && pv.Version.Prerelease() != "" {
@@ -163,7 +178,13 @@ func (lv *LatestVersion) findLatestMatchingVersion(pvs rjson.ProductVersionsMap,
 			continue
 		}
 
-		versions = append(versions, pv.Version)
+		if pv.Version.Metadata() != expectedMetadata {
+			continue
+		}
+
+		if vc.Check(pv.Version) {
+			versions = append(versions, pv.Version)
+		}
 	}
 
 	if len(versions) == 0 {

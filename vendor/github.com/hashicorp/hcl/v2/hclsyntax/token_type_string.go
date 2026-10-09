@@ -35,6 +35,7 @@ func _() {
 	_ = x[TokenBang-33]
 	_ = x[TokenDot-46]
 	_ = x[TokenComma-44]
+	_ = x[TokenDoubleColon-11820]
 	_ = x[TokenEllipsis-8230]
 	_ = x[TokenFatArrow-8658]
 	_ = x[TokenQuestion-63]
@@ -64,7 +65,7 @@ func _() {
 	_ = x[TokenNil-0]
 }
 
-const _TokenType_name = "TokenNilTokenNewlineTokenBangTokenPercentTokenBitwiseAndTokenApostropheTokenOParenTokenCParenTokenStarTokenPlusTokenCommaTokenMinusTokenDotTokenSlashTokenColonTokenSemicolonTokenLessThanTokenEqualTokenGreaterThanTokenQuestionTokenCommentTokenOHeredocTokenIdentTokenNumberLitTokenQuotedLitTokenStringLitTokenOBrackTokenCBrackTokenBitwiseXorTokenBacktickTokenCHeredocTokenOBraceTokenBitwiseOrTokenCBraceTokenBitwiseNotTokenOQuoteTokenCQuoteTokenTemplateControlTokenEllipsisTokenFatArrowTokenTemplateSeqEndTokenAndTokenOrTokenTemplateInterpTokenEqualOpTokenNotEqualTokenLessThanEqTokenGreaterThanEqTokenEOFTokenTabsTokenQuotedNewlineTokenStarStarTokenInvalidTokenBadUTF8"
+const _TokenType_name = "TokenNilTokenNewlineTokenBangTokenPercentTokenBitwiseAndTokenApostropheTokenOParenTokenCParenTokenStarTokenPlusTokenCommaTokenMinusTokenDotTokenSlashTokenColonTokenSemicolonTokenLessThanTokenEqualTokenGreaterThanTokenQuestionTokenCommentTokenOHeredocTokenIdentTokenNumberLitTokenQuotedLitTokenStringLitTokenOBrackTokenCBrackTokenBitwiseXorTokenBacktickTokenCHeredocTokenOBraceTokenBitwiseOrTokenCBraceTokenBitwiseNotTokenOQuoteTokenCQuoteTokenTemplateControlTokenEllipsisTokenFatArrowTokenTemplateSeqEndTokenAndTokenOrTokenTemplateInterpTokenEqualOpTokenNotEqualTokenLessThanEqTokenGreaterThanEqTokenEOFTokenTabsTokenQuotedNewlineTokenStarStarTokenDoubleColonTokenInvalidTokenBadUTF8"
 
 var _TokenType_map = map[TokenType]string{
 	0:      _TokenType_name[0:8],
@@ -119,8 +120,9 @@ var _TokenType_map = map[TokenType]string{
 	9225:   _TokenType_name[603:612],
 	9252:   _TokenType_name[612:630],
 	10138:  _TokenType_name[630:643],
-	65533:  _TokenType_name[643:655],
-	128169: _TokenType_name[655:667],
+	11820:  _TokenType_name[643:659],
+	65533:  _TokenType_name[659:671],
+	128169: _TokenType_name[671:683],
 }
 
 func (i TokenType) String() string {

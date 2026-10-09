@@ -30,7 +30,7 @@ func dataSourcePHPIPAMAddressRead(d *schema.ResourceData, meta interface{}) erro
 		if err != nil {
 			if strings.Contains(err.Error(), "Invalid Id") || strings.Contains(err.Error(), "No addresses found") {
 				log.Printf("[DEBUG] Invalid Id Seen")
-				log.Printf(err.Error())
+				log.Printf("[DEBUG] %s", err)
 				// IP not found by id
 				d.SetId("")
 				return nil
@@ -42,7 +42,7 @@ func dataSourcePHPIPAMAddressRead(d *schema.ResourceData, meta interface{}) erro
 		out[0], err = c.GetAddressesByIpInSubnet(d.Get("ip_address").(string), d.Get("subnet_id").(int))
 		if err != nil {
 			if strings.Contains(err.Error(), "Address not found") {
-				log.Printf("[DEBUG] Invalid IP address Seen with IPAddress: " + d.Get("ip_address").(string) + " and SubnetID: " + strconv.Itoa(d.Get("subnet_id").(int)))
+				log.Printf("[DEBUG] Invalid IP address Seen with IPAddress: %s and SubnetID: %d", d.Get("ip_address").(string), d.Get("subnet_id").(int))
 				// IP not found by IP address and subnet id
 				return nil
 			}
@@ -52,8 +52,8 @@ func dataSourcePHPIPAMAddressRead(d *schema.ResourceData, meta interface{}) erro
 		out, err = c.GetAddressesByIP(d.Get("ip_address").(string))
 		if err != nil {
 			if strings.Contains(err.Error(), "Address not found") {
-				log.Printf("[DEBUG] Invalid IP address Seen with IPAddress: " + d.Get("ip_address").(string))
-				log.Printf(d.Get("ip_address").(string) + err.Error())
+				log.Printf("[DEBUG] Invalid IP address Seen with IPAddress: %s", d.Get("ip_address").(string))
+				log.Printf("[DEBUG] %s%s", d.Get("ip_address").(string), err)
 				// IP not found by IP address
 				return nil
 			}

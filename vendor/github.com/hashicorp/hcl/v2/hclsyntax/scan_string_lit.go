@@ -1,7 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
-
 //line scan_string_lit.rl:1
+// Copyright IBM Corp. 2014, 2026
+// SPDX-License-Identifier: MPL-2.0
 
 package hclsyntax
 
@@ -117,12 +116,12 @@ const hclstrtok_error int = 0
 const hclstrtok_en_quoted int = 10
 const hclstrtok_en_unquoted int = 4
 
-//line scan_string_lit.rl:10
+//line scan_string_lit.rl:12
 
 func scanStringLit(data []byte, quoted bool) [][]byte {
 	var ret [][]byte
 
-//line scan_string_lit.rl:61
+//line scan_string_lit.rl:63
 
 	// Ragel state
 	p := 0          // "Pointer" into data
@@ -147,11 +146,11 @@ func scanStringLit(data []byte, quoted bool) [][]byte {
 	    ret = append(ret, data[ts:te])
 	}*/
 
-//line scan_string_lit.go:154
+//line scan_string_lit.go:151
 	{
 	}
 
-//line scan_string_lit.go:158
+//line scan_string_lit.go:154
 	{
 		var _klen int
 		var _trans int
@@ -232,7 +231,7 @@ func scanStringLit(data []byte, quoted bool) [][]byte {
 			_acts++
 			switch _hclstrtok_actions[_acts-1] {
 			case 0:
-//line scan_string_lit.rl:40
+//line scan_string_lit.rl:42
 
 				// If te is behind p then we've skipped over some literal
 				// characters which we must now return.
@@ -242,12 +241,12 @@ func scanStringLit(data []byte, quoted bool) [][]byte {
 				ts = p
 
 			case 1:
-//line scan_string_lit.rl:48
+//line scan_string_lit.rl:50
 
 				te = p
 				ret = append(ret, data[ts:te])
 
-//line scan_string_lit.go:253
+//line scan_string_lit.go:249
 			}
 		}
 
@@ -270,12 +269,12 @@ func scanStringLit(data []byte, quoted bool) [][]byte {
 				__acts++
 				switch _hclstrtok_actions[__acts-1] {
 				case 1:
-//line scan_string_lit.rl:48
+//line scan_string_lit.rl:50
 
 					te = p
 					ret = append(ret, data[ts:te])
 
-//line scan_string_lit.go:278
+//line scan_string_lit.go:274
 				}
 			}
 		}
@@ -285,7 +284,7 @@ func scanStringLit(data []byte, quoted bool) [][]byte {
 		}
 	}
 
-//line scan_string_lit.rl:89
+//line scan_string_lit.rl:91
 
 	if te < p {
 		// Collect any leftover literal characters at the end of the input

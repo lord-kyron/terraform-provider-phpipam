@@ -1,3 +1,6 @@
+// Copyright IBM Corp. 2020, 2026
+// SPDX-License-Identifier: MPL-2.0
+
 package tfexec
 
 import (
@@ -57,6 +60,10 @@ func (e cmdErr) Is(target error) bool {
 		return e.ctxErr == context.DeadlineExceeded || e.ctxErr == context.Canceled
 	}
 	return false
+}
+
+func (e cmdErr) Unwrap() error {
+	return e.err
 }
 
 func (e cmdErr) Error() string {
