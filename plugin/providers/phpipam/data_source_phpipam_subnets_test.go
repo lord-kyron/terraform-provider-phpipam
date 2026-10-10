@@ -95,3 +95,52 @@ func TestAccDataSourcePHPIPAMSubnets(t *testing.T) {
 		},
 	})
 }
+
+const testAccDataSourcePHPIPAMSubnetsSearchConfigStage2 = testAccDataSourcePHPIPAMSubnetsConfigStage1 + `
+data "phpipam_subnets" "subnets_by_search" {
+  search     = "multiple subnet data source"
+  section_id = phpipam_section.section.section_id
+}
+
+data "phpipam_subnets" "subnets_by_search_and_description_match" {
+  search            = "multiple subnet data source"
+  section_id        = phpipam_section.section.section_id
+  description_match = "^Terraform test subnet"
+}
+
+output "expected_subnet_ids" {
+  value = phpipam_subnet.subnets[*].subnet_id
+}
+
+output "actual_subnet_ids_search" {
+  value = data.phpipam_subnets.subnets_by_search.subnet_ids
+}
+
+output "actual_subnet_ids_search_description_match" {
+  value = data.phpipam_subnets.subnets_by_search_and_description_match.subnet_ids
+}
+`
+
+// TestAccDataSourcePHPIPAMSubnetsSearch requires phpIPAM 1.6 or higher, as
+// the search controller does not exist in earlier versions.
+func TestAccDataSourcePHPIPAMSubnetsSearch(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck: func() {
+			testAccPreCheck(t)
+			sectionSweep("tf-test", t)
+		},
+		Providers: testAccProviders,
+		Steps: []resource.TestStep{
+			resource.TestStep{
+				Config: testAccDataSourcePHPIPAMSubnetsConfigStage1,
+			},
+			resource.TestStep{
+				Config: testAccDataSourcePHPIPAMSubnetsSearchConfigStage2,
+				Check: resource.ComposeTestCheckFunc(
+					testCheckOutputPair("expected_subnet_ids", "actual_subnet_ids_search"),
+					testCheckOutputPair("expected_subnet_ids", "actual_subnet_ids_search_description_match"),
+				),
+			},
+		},
+	})
+}

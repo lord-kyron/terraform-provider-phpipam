@@ -6,6 +6,7 @@ import (
 
 	"github.com/pavel-z1/phpipam-sdk-go/controllers/addresses"
 	"github.com/pavel-z1/phpipam-sdk-go/controllers/l2domains"
+	"github.com/pavel-z1/phpipam-sdk-go/controllers/search"
 	"github.com/pavel-z1/phpipam-sdk-go/controllers/sections"
 	"github.com/pavel-z1/phpipam-sdk-go/controllers/subnets"
 	"github.com/pavel-z1/phpipam-sdk-go/controllers/vlans"
@@ -46,6 +47,9 @@ type ProviderPHPIPAMClient struct {
 	// The client for the addresses controller.
 	addressesController *addresses.Controller
 
+	// The client for the search controller.
+	searchController *search.Controller
+
 	// The client for the sections controller.
 	sectionsController *sections.Controller
 
@@ -80,6 +84,7 @@ func (c *Config) Client() (interface{}, error) {
 	// Create the client object and return it
 	client := ProviderPHPIPAMClient{
 		addressesController: addresses.NewController(sess),
+		searchController:    search.NewController(sess),
 		sectionsController:  sections.NewController(sess),
 		l2domainsController: l2domains.NewController(sess),
 		subnetsController:   subnets.NewController(sess),

@@ -2,8 +2,10 @@ package phpipam
 
 import (
 	"errors"
+	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/pavel-z1/phpipam-sdk-go/controllers/subnets"
@@ -347,7 +349,6 @@ func subnetDescriptionMatchSchema(conflicts []string) *schema.Schema {
 // do with the results (ie: reject it on matching nothing or more than one for
 // the singular data source, or extracting the IDs for the plural one).
 func subnetSearchInSection(d *schema.ResourceData, meta interface{}) ([]subnets.Subnet, error) {
-	c := meta.(*ProviderPHPIPAMClient).subnetsController
 	s := meta.(*ProviderPHPIPAMClient).sectionsController
 	result := make([]subnets.Subnet, 0)
 
@@ -359,37 +360,87 @@ func subnetSearchInSection(d *schema.ResourceData, meta interface{}) ([]subnets.
 		return result, errors.New("No subnets were found in the supplied section")
 	}
 	for _, r := range v {
-		switch {
-		// Double-assert that we don't have empty strings in the conditionals
-		// to ensure there there is no edge cases with matching zero values.
-		case d.Get("description_match").(string) != "":
-			// Don't trap error here because we should have already validated the regex via the ValidateFunc.
-			if matched, _ := regexp.MatchString(d.Get("description_match").(string), r.Description); matched {
-				result = append(result, r)
-			}
-		case d.Get("description").(string) != "" && r.Description == d.Get("description").(string):
+		matched, err := subnetMatchesFilter(d, meta, r)
+		if err != nil {
+			return result, err
+		}
+		if matched {
 			result = append(result, r)
-		case len(d.Get("custom_field_filter").(map[string]interface{})) > 0:
-			// Skip folders for now as there is issues pulling them down in the API.
-			if r.IsFolder {
-				continue
-			}
-			fields, err := c.GetSubnetCustomFields(r.ID)
-			if err != nil {
-				return result, err
-			}
-			search := d.Get("custom_field_filter").(map[string]interface{})
-			if err != nil {
-				return result, err
-			}
-			matched, err := customFieldFilter(fields, search)
-			if err != nil {
-				return result, err
-			}
-			if matched {
-				result = append(result, r)
-			}
 		}
 	}
 	return result, nil
+}
+
+// subnetSearchAll provides the free-text search functionality for the
+// phpipam_subnets data source, using the phpIPAM search controller (phpIPAM
+// 1.6 or higher). The results are optionally narrowed down to a section and by
+// the description, description_match or custom_field_filter arguments.
+func subnetSearchAll(d *schema.ResourceData, meta interface{}) ([]subnets.Subnet, error) {
+	c := meta.(*ProviderPHPIPAMClient).searchController
+	result := make([]subnets.Subnet, 0)
+
+	v, err := c.SearchSubnets(d.Get("search").(string))
+	switch {
+	case err != nil && strings.Contains(err.Error(), "returned code 404"):
+		// phpIPAM reports an empty search result with code 404.
+		return result, nil
+	case err != nil:
+		return result, fmt.Errorf("Error searching for subnets: %s", err)
+	}
+
+	sectionID := d.Get("section_id").(int)
+	filtered := subnetHasFilter(d)
+	for _, r := range v {
+		if sectionID != 0 && r.SectionID != sectionID {
+			continue
+		}
+		if filtered {
+			matched, err := subnetMatchesFilter(d, meta, r)
+			if err != nil {
+				return result, err
+			}
+			if !matched {
+				continue
+			}
+		}
+		result = append(result, r)
+	}
+	return result, nil
+}
+
+// subnetHasFilter returns true if any of the description, description_match
+// or custom_field_filter arguments are set.
+func subnetHasFilter(d *schema.ResourceData) bool {
+	return d.Get("description").(string) != "" ||
+		d.Get("description_match").(string) != "" ||
+		len(d.Get("custom_field_filter").(map[string]interface{})) > 0
+}
+
+// subnetMatchesFilter checks a subnet against the description,
+// description_match or custom_field_filter arguments. It returns false if
+// none of them are set.
+func subnetMatchesFilter(d *schema.ResourceData, meta interface{}, r subnets.Subnet) (bool, error) {
+	c := meta.(*ProviderPHPIPAMClient).subnetsController
+	switch {
+	// Double-assert that we don't have empty strings in the conditionals
+	// to ensure there there is no edge cases with matching zero values.
+	case d.Get("description_match").(string) != "":
+		// Don't trap error here because we should have already validated the regex via the ValidateFunc.
+		matched, _ := regexp.MatchString(d.Get("description_match").(string), r.Description)
+		return matched, nil
+	case d.Get("description").(string) != "" && r.Description == d.Get("description").(string):
+		return true, nil
+	case len(d.Get("custom_field_filter").(map[string]interface{})) > 0:
+		// Skip folders for now as there is issues pulling them down in the API.
+		if r.IsFolder {
+			return false, nil
+		}
+		fields, err := c.GetSubnetCustomFields(r.ID)
+		if err != nil {
+			return false, err
+		}
+		search := d.Get("custom_field_filter").(map[string]interface{})
+		return customFieldFilter(fields, search)
+	}
+	return false, nil
 }

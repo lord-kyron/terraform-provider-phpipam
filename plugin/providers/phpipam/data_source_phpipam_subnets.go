@@ -1,9 +1,12 @@
 package phpipam
 
 import (
+	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/pavel-z1/phpipam-sdk-go/controllers/subnets"
 )
 
 func dataSourcePHPIPAMSubnets() *schema.Resource {
@@ -11,8 +14,15 @@ func dataSourcePHPIPAMSubnets() *schema.Resource {
 		Read: dataSourcePHPIPAMSubnetsRead,
 		Schema: map[string]*schema.Schema{
 			"section_id": &schema.Schema{
-				Type:     schema.TypeInt,
-				Required: true,
+				Type:         schema.TypeInt,
+				Optional:     true,
+				AtLeastOneOf: []string{"section_id", "search"},
+			},
+			"search": &schema.Schema{
+				Type:         schema.TypeString,
+				Optional:     true,
+				AtLeastOneOf: []string{"section_id", "search"},
+				ValidateFunc: validateSubnetSearch,
 			},
 			"description": &schema.Schema{
 				Type:     schema.TypeString,
@@ -30,7 +40,13 @@ func dataSourcePHPIPAMSubnets() *schema.Resource {
 }
 
 func dataSourcePHPIPAMSubnetsRead(d *schema.ResourceData, meta interface{}) error {
-	out, err := subnetSearchInSection(d, meta)
+	var out []subnets.Subnet
+	var err error
+	if d.Get("search").(string) != "" {
+		out, err = subnetSearchAll(d, meta)
+	} else {
+		out, err = subnetSearchInSection(d, meta)
+	}
 	if err != nil {
 		return err
 	}
@@ -48,4 +64,13 @@ func dataSourcePHPIPAMSubnetsRead(d *schema.ResourceData, meta interface{}) erro
 	}
 
 	return nil
+}
+
+// validateSubnetSearch rejects search strings that cannot be sent in the
+// search controller's URL path.
+func validateSubnetSearch(v interface{}, k string) (ws []string, errs []error) {
+	if strings.ContainsAny(v.(string), "/?#") {
+		errs = append(errs, fmt.Errorf("%s must not contain '/', '?' or '#'; to search for a subnet by CIDR, search for its network address", k))
+	}
+	return
 }

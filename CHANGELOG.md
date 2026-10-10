@@ -1,3 +1,6 @@
+## 1.7.2
+ * Added a `search` argument to the `phpipam_subnets` data source for free-text subnet search across all sections, using the phpIPAM search controller (requires phpIPAM 1.6 or higher). `section_id` is now optional when `search` is set; when both are given, `section_id` limits the results to that section, and `description`, `description_match` and `custom_field_filter` further narrow them down
+ * Fixed the example in the `phpipam_subnets` data source docs, which used `subnet_id` instead of `section_id` and block syntax for `custom_field_filter`
 ## 1.7.1
  * Added support for subnet_ids to phpipam_first_free_address - [issue #101](https://github.com/lord-kyron/terraform-provider-phpipam/pull/101)
  * Fixed phpipam_address state refresh with phpIPAM 1.8.3 - [issue #103](https://github.com/lord-kyron/terraform-provider-phpipam/pull/103)
