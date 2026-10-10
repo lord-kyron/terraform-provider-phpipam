@@ -9,6 +9,7 @@
 [![Go version](https://img.shields.io/github/go-mod/go-version/lord-kyron/terraform-provider-phpipam?style=flat-square&logo=go)](./go.mod)
 [![License](https://img.shields.io/github/license/lord-kyron/terraform-provider-phpipam?color=orange&logo=apache&style=flat-square)](./LICENSE.md)
 [![GitHub last commit](https://img.shields.io/github/last-commit/lord-kyron/terraform-provider-phpipam?style=flat-square&logo=github)](https://github.com/lord-kyron/terraform-provider-phpipam/commits/master)
+[![Sponsor](https://img.shields.io/badge/sponsor-%E2%9D%A4-EA4AAA?style=flat-square&logo=githubsponsors)](https://github.com/sponsors/lord-kyron)
 
 This repository holds a external plugin for a [Terraform][1] provider to manage
 resources within [PHPIPAM][2], an open source IP address management system.
@@ -139,6 +140,13 @@ go clean -testcache; TF_ACC=1 go test -v ./plugin/providers/phpipam -run="TestAc
 PASS
 ok    github.com/lord-kyron/terraform-provider-phpipam/plugin/providers/phpipam 31.522s
 ```
+
+## Supporting this project
+
+If this provider saves you or your company time, please consider
+[sponsoring its maintenance on GitHub](https://github.com/sponsors/lord-kyron).
+Sponsorships help keep the provider up to date with new phpIPAM and Terraform
+releases.
 
 ## LICENSE
 
