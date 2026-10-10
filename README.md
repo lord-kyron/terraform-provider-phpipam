@@ -17,6 +17,13 @@ resources within [PHPIPAM][2], an open source IP address management system.
 [1]: https://www.terraform.io/
 [2]: https://phpipam.net/
 
+## Supporting this project
+
+If this provider saves you or your company time, please consider
+[sponsoring its maintenance on GitHub](https://github.com/sponsors/lord-kyron).
+Sponsorships help keep the provider up to date with new phpIPAM and Terraform
+releases.
+
 ## About PHPIPAM
 
 [PHPIPAM][2] is an open source IP address management system written in PHP. It
@@ -140,13 +147,6 @@ go clean -testcache; TF_ACC=1 go test -v ./plugin/providers/phpipam -run="TestAc
 PASS
 ok    github.com/lord-kyron/terraform-provider-phpipam/plugin/providers/phpipam 31.522s
 ```
-
-## Supporting this project
-
-If this provider saves you or your company time, please consider
-[sponsoring its maintenance on GitHub](https://github.com/sponsors/lord-kyron).
-Sponsorships help keep the provider up to date with new phpIPAM and Terraform
-releases.
 
 ## LICENSE
 
