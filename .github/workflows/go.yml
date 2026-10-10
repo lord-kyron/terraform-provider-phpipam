@@ -6,6 +6,10 @@
 # The key's fingerprint is handed to GoReleaser as GPG_FINGERPRINT; the signing
 # step in .goreleaser.yml passes `--batch` so gpg runs non-interactively.
 #
+# The release notes are the tag's section of CHANGELOG.md, extracted by
+# scripts/release_notes.sh. The release fails if that section is missing, so
+# add the CHANGELOG.md entry before tagging.
+#
 name: release
 on:
   push:
@@ -34,12 +38,15 @@ jobs:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.PASSPHRASE }}
       -
+        name: Extract release notes from CHANGELOG.md
+        run: scripts/release_notes.sh "${GITHUB_REF_NAME}" > "${RUNNER_TEMP}/release-notes.md"
+      -
         name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
           version: '~> v2'
-          args: release --clean
+          args: release --clean --release-notes=${{ runner.temp }}/release-notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GPG_FINGERPRINT: ${{ steps.import_gpg.outputs.fingerprint }}

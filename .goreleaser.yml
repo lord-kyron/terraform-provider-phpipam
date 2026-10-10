@@ -66,5 +66,7 @@ release:
   # To review a release before it goes live, uncomment:
   # draft: true
 
-changelog:
-  disable: true
+# The release notes come from CHANGELOG.md via --release-notes (see
+# .github/workflows/go.yml). The changelog step must stay enabled, as it is
+# also what loads that file; with a notes file given, no changelog is
+# generated from git history.
