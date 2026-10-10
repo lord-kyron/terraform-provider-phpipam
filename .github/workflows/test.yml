@@ -1,0 +1,55 @@
+# Checks formatting, module tidiness and the vendor directory, then runs
+# go vet and the unit tests on every push to master and every pull request.
+#
+# Acceptance tests (TestAcc*) need a live phpIPAM and are skipped here, as
+# TF_ACC is not set. Run them locally with `make testacc`.
+#
+name: test
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The release toolchain, plus the latest Go release to catch
+        # incompatibilities early.
+        go: ['1.26', 'stable']
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v6
+      -
+        name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go }}
+      -
+        name: gofmt
+        run: |
+          unformatted=$(gofmt -l $(git ls-files '*.go' | grep -v '^vendor/'))
+          if [ -n "${unformatted}" ]; then
+            echo "These files are not gofmt-formatted:"
+            echo "${unformatted}"
+            exit 1
+          fi
+      -
+        name: go mod tidy
+        run: go mod tidy -diff
+      -
+        name: vendor directory is up to date
+        run: |
+          go mod vendor
+          git diff --exit-code -- vendor
+      -
+        name: go vet
+        run: go vet ./...
+      -
+        name: go test
+        run: go test -race ./...
