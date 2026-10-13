@@ -152,7 +152,17 @@ func resourcePHPIPAMFirstFreeAddressCustomizeDiff(ctx context.Context, d *schema
 		return nil
 	}
 	subnetIDsInConfig := rawConfig.GetAttr("subnet_ids")
-	if subnetIDsInConfig.IsNull() || !subnetIDsInConfig.IsKnown() {
+	if subnetIDsInConfig.IsNull() {
+		// States written before 1.8.0, or imported, have no subnet_ids: an empty
+		// Computed+ForceNew list would otherwise be planned as unknown and force
+		// a replacement of an address whose subnet_id did not change.
+		oldIDs, _ := d.GetChange("subnet_ids")
+		if len(oldIDs.([]interface{})) == 0 && !d.HasChange("subnet_id") {
+			return d.Clear("subnet_ids")
+		}
+		return nil
+	}
+	if !subnetIDsInConfig.IsKnown() {
 		return nil
 	}
 
