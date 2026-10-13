@@ -137,3 +137,72 @@ func TestResourcePHPIPAMFirstFreeAddressCustomizeDiff(t *testing.T) {
 		})
 	}
 }
+
+// TestResourcePHPIPAMFirstFreeAddressCustomizeDiffLegacyState covers states
+// written before 1.7.1 (or imported), which have no subnet_ids at all.
+func TestResourcePHPIPAMFirstFreeAddressCustomizeDiffLegacyState(t *testing.T) {
+	res := resourcePHPIPAMFirstFreeAddress()
+
+	priorStateAttrs := map[string]interface{}{
+		"subnet_id":   139,
+		"ip_address":  "10.10.15.1",
+		"address_id":  5000,
+		"hostname":    "tf-test.cust1.local",
+		"description": "Terraform test address",
+	}
+
+	cases := []struct {
+		name            string
+		config          map[string]interface{}
+		wantRequiresNew bool
+	}{
+		{
+			name: "unchanged subnet_id does not force a replacement",
+			config: map[string]interface{}{
+				"subnet_id":   139,
+				"hostname":    "tf-test.cust1.local",
+				"description": "Terraform test address",
+			},
+			wantRequiresNew: false,
+		},
+		{
+			name: "changing subnet_id still forces a replacement",
+			config: map[string]interface{}{
+				"subnet_id":   140,
+				"hostname":    "tf-test.cust1.local",
+				"description": "Terraform test address",
+			},
+			wantRequiresNew: true,
+		},
+		{
+			name: "moving to subnet_ids containing the current subnet is a no-op",
+			config: map[string]interface{}{
+				"subnet_ids":  []interface{}{139, 140},
+				"hostname":    "tf-test.cust1.local",
+				"description": "Terraform test address",
+			},
+			wantRequiresNew: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := schema.TestResourceDataRaw(t, res.Schema, priorStateAttrs)
+			d.SetId("5000")
+			state := d.State()
+			state.RawConfig = buildRawConfig(t, res, tc.config)
+
+			cfg := terraform.NewResourceConfigRaw(tc.config)
+
+			diff, err := res.SimpleDiff(context.Background(), state, cfg, nil)
+			if err != nil {
+				t.Fatalf("diff error: %s", err)
+			}
+
+			requiresNew := diff != nil && diff.RequiresNew()
+			if requiresNew != tc.wantRequiresNew {
+				t.Fatalf("wantRequiresNew=%v, got %v; diff: %#v", tc.wantRequiresNew, requiresNew, diff)
+			}
+		})
+	}
+}
