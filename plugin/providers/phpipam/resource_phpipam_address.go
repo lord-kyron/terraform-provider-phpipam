@@ -1,6 +1,7 @@
 package phpipam
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -22,9 +23,18 @@ func resourcePHPIPAMAddress() *schema.Resource {
 		Delete: resourcePHPIPAMAddressDelete,
 		Schema: resourceAddressSchema(),
 		Importer: &schema.ResourceImporter{
-			StateContext: schema.ImportStatePassthroughContext,
+			StateContext: resourcePHPIPAMAddressImport,
 		},
 	}
+}
+
+// resourcePHPIPAMAddressImport sets remove_dns_on_delete to its default, as it
+// is not part of the API resource and would otherwise be missing after import.
+func resourcePHPIPAMAddressImport(ctx context.Context, d *schema.ResourceData, meta interface{}) ([]*schema.ResourceData, error) {
+	if err := d.Set("remove_dns_on_delete", true); err != nil {
+		return nil, err
+	}
+	return []*schema.ResourceData{d}, nil
 }
 
 // resourcePHPIPAMAddressRead restores address_id from Terraform's resource ID

@@ -3,6 +3,7 @@ package phpipam
 import (
 	"errors"
 	"log"
+	"strconv"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
@@ -46,7 +47,19 @@ func dataSourcePHPIPAML2DomainRead(d *schema.ResourceData, meta interface{}) err
 		}
 		out = list_out[0]
 	default:
-		return errors.New("domain_id or name not defined, cannot proceed with reading data")
+		// Imported resources only have an Id, which we need to map back to domain_id.
+		id := d.Id()
+		if len(id) == 0 {
+			return errors.New("domain_id or name not defined, cannot proceed with reading data")
+		}
+		domain_id, err := strconv.Atoi(id)
+		if err != nil {
+			return err
+		}
+		out, err = c.GetL2DomainByID(domain_id)
+		if err != nil {
+			return err
+		}
 	}
 	flattenL2Domain(out, d)
 	return nil
