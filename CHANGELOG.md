@@ -1,3 +1,7 @@
+## 1.7.3
+ * Fixed `phpipam_first_free_address` forcing a replacement for imported resources and states created before 1.7.1 - [pull request #104](https://github.com/lord-kyron/terraform-provider-phpipam/pull/104)
+ * Fixed `terraform import` of `phpipam_l2domain`, which failed with `domain_id or name not defined`
+ * Fixed `remove_dns_on_delete` missing after importing a `phpipam_address`, which caused a spurious update on the next plan
 ## 1.7.2
  * Added a `search` argument to the `phpipam_subnets` data source for free-text subnet search across all sections, using the phpIPAM search controller (requires phpIPAM 1.6 or higher). `section_id` is now optional when `search` is set; when both are given, `section_id` limits the results to that section, and `description`, `description_match` and `custom_field_filter` further narrow them down
  * Fixed the example in the `phpipam_subnets` data source docs, which used `subnet_id` instead of `section_id` and block syntax for `custom_field_filter`
