@@ -19,7 +19,16 @@ resource "phpipam_l2domain" "l2domain" {
 }
 `
 
+const testAccResourcePHPIPAML2DomainUpdateConfig = `
+resource "phpipam_l2domain" "l2domain" {
+  name        = "tf-test-l2domain"
+  description = "Terraform test l2domain, updated"
+}
+`
+
 func TestAccResourcePHPIPAML2Domain(t *testing.T) {
+	var id string
+
 	resource.Test(t, resource.TestCase{
 		PreCheck: func() {
 			testAccPreCheck(t)
@@ -34,7 +43,20 @@ func TestAccResourcePHPIPAML2Domain(t *testing.T) {
 					testAccCheckResourcePHPIPAML2DomainCreated,
 					resource.TestCheckResourceAttr("phpipam_l2domain.l2domain", "name", "tf-test-l2domain"),
 					resource.TestCheckResourceAttr("phpipam_l2domain.l2domain", "description", "Terraform test l2domain"),
+					testCheckResourceIDSave("phpipam_l2domain.l2domain", &id),
 				),
+			},
+			resource.TestStep{
+				Config: testAccResourcePHPIPAML2DomainUpdateConfig,
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("phpipam_l2domain.l2domain", "description", "Terraform test l2domain, updated"),
+					testCheckResourceIDUnchanged("phpipam_l2domain.l2domain", &id),
+				),
+			},
+			resource.TestStep{
+				ResourceName:      "phpipam_l2domain.l2domain",
+				ImportState:       true,
+				ImportStateVerify: true,
 			},
 		},
 	})

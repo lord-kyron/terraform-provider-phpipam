@@ -34,3 +34,31 @@ func testCheckOutputPair(nameFirst, nameSecond string) resource.TestCheckFunc {
 		return nil
 	}
 }
+
+// testCheckResourceIDSave stores the ID of a resource, so that a later step can
+// check with testCheckResourceIDUnchanged that it was updated in place.
+func testCheckResourceIDSave(name string, id *string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		r, ok := s.RootModule().Resources[name]
+		if !ok {
+			return fmt.Errorf("Resource not found: %s", name)
+		}
+		*id = r.Primary.ID
+		return nil
+	}
+}
+
+// testCheckResourceIDUnchanged fails if a resource got a new ID, i.e. it was
+// replaced instead of updated in place.
+func testCheckResourceIDUnchanged(name string, id *string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		r, ok := s.RootModule().Resources[name]
+		if !ok {
+			return fmt.Errorf("Resource not found: %s", name)
+		}
+		if r.Primary.ID != *id {
+			return fmt.Errorf("%s was replaced: ID changed from %s to %s", name, *id, r.Primary.ID)
+		}
+		return nil
+	}
+}

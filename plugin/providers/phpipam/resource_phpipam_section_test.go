@@ -19,7 +19,16 @@ resource "phpipam_section" "section" {
 }
 `
 
+const testAccResourcePHPIPAMSectionUpdateConfig = `
+resource "phpipam_section" "section" {
+  name        = "tf-test"
+  description = "Terraform test section, updated"
+}
+`
+
 func TestAccResourcePHPIPAMSection(t *testing.T) {
+	var id string
+
 	resource.Test(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
@@ -31,7 +40,20 @@ func TestAccResourcePHPIPAMSection(t *testing.T) {
 					testAccCheckResourcePHPIPAMSectionCreated,
 					resource.TestCheckResourceAttr("phpipam_section.section", "name", "tf-test"),
 					resource.TestCheckResourceAttr("phpipam_section.section", "description", "Terraform test section"),
+					testCheckResourceIDSave("phpipam_section.section", &id),
 				),
+			},
+			resource.TestStep{
+				Config: testAccResourcePHPIPAMSectionUpdateConfig,
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("phpipam_section.section", "description", "Terraform test section, updated"),
+					testCheckResourceIDUnchanged("phpipam_section.section", &id),
+				),
+			},
+			resource.TestStep{
+				ResourceName:      "phpipam_section.section",
+				ImportState:       true,
+				ImportStateVerify: true,
 			},
 		},
 	})

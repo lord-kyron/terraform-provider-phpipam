@@ -121,6 +121,11 @@ func TestAccResourcePHPIPAMAddress(t *testing.T) {
 					resource.TestCheckResourceAttr("phpipam_address.address", "hostname", "tf-test.cust1.local"),
 				),
 			},
+			resource.TestStep{
+				ResourceName:      "phpipam_address.address",
+				ImportState:       true,
+				ImportStateVerify: true,
+			},
 		},
 	})
 }
@@ -174,6 +179,11 @@ func TestAccResourcePHPIPAMAddress_CustomFields(t *testing.T) {
 					resource.TestCheckResourceAttr("phpipam_address.address", "hostname", "tf-test.cust1.local"),
 					resource.TestCheckNoResourceAttr("phpipam_address.address", "custom_fields.custom_CustomTestAddresses"),
 				),
+			},
+			resource.TestStep{
+				ResourceName:      "phpipam_address.address",
+				ImportState:       true,
+				ImportStateVerify: true,
 			},
 		},
 	})

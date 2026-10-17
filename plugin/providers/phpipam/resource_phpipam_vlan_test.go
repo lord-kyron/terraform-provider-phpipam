@@ -75,6 +75,11 @@ func TestAccResourcePHPIPAMVLAN(t *testing.T) {
 					resource.TestCheckResourceAttr("phpipam_vlan.vlan", "description", "Terraform test vlan"),
 				),
 			},
+			resource.TestStep{
+				ResourceName:      "phpipam_vlan.vlan",
+				ImportState:       true,
+				ImportStateVerify: true,
+			},
 		},
 	})
 }

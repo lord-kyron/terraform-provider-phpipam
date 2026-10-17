@@ -85,6 +85,14 @@ func TestAccResourcePHPIPAMFirstFreeAddress(t *testing.T) {
 					resource.TestCheckResourceAttrPair("phpipam_first_free_address.next", "subnet_id", "phpipam_subnet.subnet", "subnet_id"),
 				),
 			},
+			resource.TestStep{
+				ResourceName:      "phpipam_first_free_address.next",
+				ImportState:       true,
+				ImportStateVerify: true,
+				// subnet_ids only exists in the config: phpIPAM does not store
+				// which list the address was picked from.
+				ImportStateVerifyIgnore: []string{"subnet_ids"},
+			},
 		},
 	})
 }
@@ -103,6 +111,14 @@ func TestAccResourcePHPIPAMFirstFreeAddressSubnetIDs(t *testing.T) {
 					resource.TestCheckResourceAttr("phpipam_first_free_address.next", "ip_address", "10.10.10.1"),
 					resource.TestCheckResourceAttrPair("phpipam_first_free_address.next", "subnet_id", "phpipam_subnet.free", "subnet_id"),
 				),
+			},
+			resource.TestStep{
+				ResourceName:      "phpipam_first_free_address.next",
+				ImportState:       true,
+				ImportStateVerify: true,
+				// subnet_ids only exists in the config: phpIPAM does not store
+				// which list the address was picked from.
+				ImportStateVerifyIgnore: []string{"subnet_ids"},
 			},
 		},
 	})

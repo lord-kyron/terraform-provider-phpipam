@@ -83,6 +83,11 @@ func TestAccResourcePHPIPAMSubnet(t *testing.T) {
 					resource.TestCheckResourceAttr("phpipam_subnet.subnet", "description", "Terraform test subnet"),
 				),
 			},
+			resource.TestStep{
+				ResourceName:      "phpipam_subnet.subnet",
+				ImportState:       true,
+				ImportStateVerify: true,
+			},
 		},
 	})
 }
@@ -115,6 +120,11 @@ func TestAccResourcePHPIPAMSubnet_CustomFields(t *testing.T) {
 					resource.TestCheckResourceAttr("phpipam_subnet.subnet", "description", "Terraform test subnet (custom fields), step 2"),
 					resource.TestCheckNoResourceAttr("phpipam_subnet.subnet", "custom_fields.custom_CustomTestSubnets"),
 				),
+			},
+			resource.TestStep{
+				ResourceName:      "phpipam_subnet.subnet",
+				ImportState:       true,
+				ImportStateVerify: true,
 			},
 		},
 	})
